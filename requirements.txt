@@ -1,0 +1,8 @@
+# Cove Launcher requirements
+PyQt6>=6.6,<7
+PyQt6-Fluent-Widgets>=1.5
+minecraft-launcher-lib>=7.0
+cryptography>=42.0
+markdown>=3.4
+
+

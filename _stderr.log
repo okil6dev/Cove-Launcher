@@ -1,0 +1,2 @@
+QObject::disconnect: wildcard call disconnects from destroyed signal of LineEditButton::lineEditButton
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0

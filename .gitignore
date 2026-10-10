@@ -1,0 +1,27 @@
+# Gitignored files and directories
+
+# Sensitive configuration files (AI installer API keys, etc.)
+*.ai_key
+*.installer_key
+*.ai_secret
+*.key
+*.pem
+
+# Encrypted vault files (contain sensitive data)
+*.vault*
+
+# Secret files
+secrets/
+*.secret
+
+# IDE-specific configs that may contain secrets
+.idea/
+.vscode/
+
+# OS-specific configs
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.cache
