@@ -367,13 +367,13 @@ class InstancesPage(QWidget):
         return self._cube_icon
 
     def _apply_list_theme(self) -> None:
-        from ..theme import item_sel_bg, item_hover_bg
+        from ..theme import fg, item_hover_bg, item_sel_bg
 
         self.list_widget.setStyleSheet(
-            "QListWidget { background: transparent; border: none; }"
-            "QListWidget::item { border-radius: 10px; }"
-            f"QListWidget::item:selected {{ background: {item_sel_bg()}; }}"
-            f"QListWidget::item:hover:!selected {{ background: {item_hover_bg()}; }}"
+            f"QListWidget {{ background: transparent; border: none; color: {fg()}; }}"
+            f"QListWidget::item {{ border-radius: 10px; color: {fg()}; }}"
+            f"QListWidget::item:selected {{ background: {item_sel_bg()}; color: {fg()}; }}"
+            f"QListWidget::item:hover:!selected {{ background: {item_hover_bg()}; color: {fg()}; }}"
         )
 
     def _apply_card_theme(self) -> None:

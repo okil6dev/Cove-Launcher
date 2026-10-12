@@ -46,7 +46,6 @@ from qfluentwidgets import (
     InfoBar,
     InfoBarPosition,
     LineEdit,
-    MessageBox,
     MSFluentWindow,
     PushButton,
     SubtitleLabel,
@@ -73,24 +72,40 @@ from .system_info import get_total_ram_gb
 
 # Each page widget gets a unique objectName so MSFluentWindow.addSubInterface
 # registers a distinct navigation routeKey.
-_ROOT_QSS = """
+def _root_qss() -> str:
+    from .theme import (
+        accent_edge,
+        fg,
+        fg_faint,
+        fg_muted,
+        hairline,
+        item_hover_bg,
+        item_sel_bg,
+        menu_bg,
+    )
+    return f"""
 QWidget#serverSettingsPage, QWidget#serverPropsPage, QWidget#serverWorldsPage,
-QWidget#serverFilesPage { background: transparent; border: none; }
-QLabel#infoValue { color: #e6f2f2; }
-QLabel#infoKey   { color: #9fb4bd; }
-QListWidget { background: transparent; border: none; }
-QLabel#emptyHint   { color: #7d939d; font-size: 12px; }
-QWidget { background: transparent; border: none; }
-QComboBox, QLineEdit, QPushButton { background: transparent; color: #cfd8dc; border: none; border-radius: 5px; padding: 6px 12px; }
-QComboBox:hover, QPushButton:hover { border: none; }
-QComboBox::drop-down { background: transparent; border: none; }
-QComboBox QAbstractItemView { background: transparent; color: #cfd8dc; border: none; selection-background-color: #264f59; }
-QScrollBar:vertical { background: transparent; width: 12px; border-radius: 6px; border: none; }
-QScrollBar::handle:vertical { background: #264f59; border-radius: 6px; min-height: 20px; border: none; }
-QScrollBar::handle:vertical:hover { background: #316371; }
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
-QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
+QWidget#serverFilesPage {{ background: transparent; border: none; }}
+QLabel#infoValue {{ color: {fg()}; }}
+QLabel#infoKey   {{ color: {fg_muted()}; }}
+QListWidget {{ background: transparent; border: none; color: {fg()}; }}
+QListWidget::item {{ color: {fg()}; }}
+QListWidget::item:selected {{ background: {item_sel_bg()}; color: {fg()}; }}
+QListWidget::item:hover:!selected {{ background: {item_hover_bg()}; color: {fg()}; }}
+QLabel#emptyHint   {{ color: {fg_faint()}; font-size: 12px; }}
+QWidget {{ background: transparent; border: none; }}
+QComboBox, QLineEdit, QPushButton {{ background: transparent; color: {fg()}; border: none; border-radius: 5px; padding: 6px 12px; }}
+QComboBox:hover, QPushButton:hover {{ border: none; }}
+QComboBox::drop-down {{ background: transparent; border: none; }}
+QComboBox QAbstractItemView {{ background: {menu_bg()}; color: {fg()}; border: 1px solid {hairline()}; selection-background-color: {item_sel_bg()}; selection-color: {fg()}; }}
+QScrollBar:vertical {{ background: transparent; width: 12px; border-radius: 6px; border: none; }}
+QScrollBar::handle:vertical {{ background: {accent_edge()}; border-radius: 6px; min-height: 20px; border: none; }}
+QScrollBar::handle:vertical:hover {{ background: {accent_edge()}; }}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; }}
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: transparent; }}
 """
+
+_ROOT_QSS = _root_qss()
 
 
 def _fmt_size(num: int) -> str:
@@ -123,7 +138,7 @@ class ServerEditorWindow(MSFluentWindow):
         from .window_sizes import get_size
 
         self.resize(*get_size("server_editor"))
-        self.setStyleSheet(_ROOT_QSS)
+        self.refresh_theme()
         self._center_on_screen()
 
         self._build_settings_page()
@@ -132,8 +147,16 @@ class ServerEditorWindow(MSFluentWindow):
         self._build_files_page()
         self._refresh_all()
 
+    def refresh_theme(self) -> None:
+        """Rebuild theme-dependent QSS (called on live theme change)."""
+        try:
+            self.setStyleSheet(_root_qss())
+        except Exception:
+            pass
+
     def showEvent(self, event) -> None:  # noqa: N802 - Qt API
         super().showEvent(event)
+        self.refresh_theme()
         # Centre once the real geometry is known (the deferred Fluent layout
         # lands after __init__), then re-centre over the next few frames so
         # the settled layout cannot undo it.
@@ -509,6 +532,8 @@ class ServerEditorWindow(MSFluentWindow):
             subprocess.Popen([opener, path])
 
     def _on_world_rename(self) -> None:
+        from .cove_dialog import CoveInput
+        from .servers import validate_name as _validate_world_name
         name = self._selected_world()
         if name is None:
             return
@@ -516,16 +541,25 @@ class ServerEditorWindow(MSFluentWindow):
             self._toast("warning", "Server running",
                         "Stop the server before renaming a world.")
             return
-        dlg = _RenameWorldDialog(name, self)
-        if not dlg.exec() or not dlg.result_name:
+        def _problem(val: str) -> str:
+            try:
+                _validate_world_name(val)
+            except Exception as exc:
+                return str(exc)
+            return ""
+        new_name = CoveInput.ask(
+            self.window(), "Rename world", f"New name for '{name}':",
+            initial=name, ok="Rename", validate=_problem,
+        )
+        if not new_name:
             return
         try:
-            rename_world(self._server, name, dlg.result_name)
+            rename_world(self._server, name, new_name)
         except ServerError as exc:
             self._toast("error", "Rename failed", str(exc))
             return
         self._refresh_worlds()
-        self._toast("success", "Renamed", f"World is now '{dlg.result_name}'.")
+        self._toast("success", "Renamed", f"World is now '{new_name}'.")
 
     def _on_world_delete(self) -> None:
         name = self._selected_world()
@@ -535,10 +569,13 @@ class ServerEditorWindow(MSFluentWindow):
             self._toast("warning", "Server running",
                         "Stop the server before deleting a world.")
             return
-        box = MessageBox("Delete world?",
-                         f"Permanently delete the world '{name}'?\n"
-                         "This cannot be undone.", self)
-        if not box.exec():
+        from .cove_dialog import CoveConfirm
+        if not CoveConfirm.ask(
+            self.window(), "Delete world?",
+            f"Permanently delete the world '{name}'?\n"
+            "This cannot be undone.",
+            ok="Delete",
+        ):
             return
         import shutil as _shutil
         try:
@@ -638,10 +675,13 @@ class ServerEditorWindow(MSFluentWindow):
         if item is None:
             return
         name = item.text()
-        box = MessageBox("Delete file?",
-                         f"Permanently delete '{name}' from {subdir}/?\n"
-                         "This cannot be undone.", self)
-        if not box.exec():
+        from .cove_dialog import CoveConfirm
+        if not CoveConfirm.ask(
+            self.window(), "Delete file?",
+            f"Permanently delete '{name}' from {subdir}/?\n"
+            "This cannot be undone.",
+            ok="Delete",
+        ):
             return
         try:
             delete_server_file(self._server, subdir, name)
@@ -664,36 +704,3 @@ class ServerEditorWindow(MSFluentWindow):
         self.name_edit.setText(server.name)
         self.setWindowTitle(f"Edit server — {server.name}")
         self._refresh_all()
-
-
-class _RenameWorldDialog(MessageBox):
-    """Small prompt for a new world-folder name (validates on accept)."""
-
-    def __init__(self, current: str, parent=None) -> None:
-        super().__init__("Rename world", "", parent)
-        self.result_name: str | None = None
-        body = QWidget()
-        lay = QVBoxLayout(body)
-        lay.setContentsMargins(0, 0, 0, 0)
-        self.edit = LineEdit()
-        self.edit.setText(current)
-        self.edit.setClearButtonEnabled(True)
-        lay.addWidget(BodyLabel(f"New name for '{current}':"))
-        lay.addWidget(self.edit)
-        self.viewLayout.addWidget(body)
-        self.yesButton.setText("Rename")
-        try:
-            self.yesButton.clicked.disconnect()
-        except Exception:
-            pass
-        self.yesButton.clicked.connect(self._on_accept)
-
-    def _on_accept(self) -> None:
-        from .servers import validate_name
-        try:
-            validate_name(self.edit.text())
-        except ServerError:
-            self.edit.setToolTip("Invalid name.")
-            return
-        self.result_name = self.edit.text().strip()
-        self.accept()

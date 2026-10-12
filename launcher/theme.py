@@ -140,6 +140,21 @@ def indicator_bg() -> str:
     return "#152028" if is_dark_now() else "#ffffff"
 
 
+def card_bg() -> str:
+    """Solid card surface (opaque -- never translucent white)."""
+    return "#2b2b2b" if is_dark_now() else "#ffffff"
+
+
+def menu_bg() -> str:
+    """Solid popup-menu surface (opaque -- readable in every theme)."""
+    return "#2f3336" if is_dark_now() else "#f4f6f8"
+
+
+def field_bg() -> str:
+    """Solid input-field surface (opaque -- readable in light themes)."""
+    return "#1e2429" if is_dark_now() else "#eef1f4"
+
+
 def apply_theme(key: str | None, window=None) -> str:
     """
     Apply the theme *key* app-wide (Fluent widgets) and to *window* (DWM
@@ -247,6 +262,25 @@ def _install_acrylic_guard(window, hwnd: int) -> None:
     window.destroyed.connect(timer.stop)
 
 
+def _disable_backdrop(hwnd: int) -> None:
+    """Disable Windows 11 DWM system backdrop (reverting to solid window background)."""
+    try:
+        import ctypes
+
+        dwmapi = ctypes.windll.dwmapi
+        # 1 = DWMSBT_NONE
+        none_val = ctypes.c_int(1)
+        dwmapi.DwmSetWindowAttribute(
+            hwnd, _DWMWA_SYSTEMBACKDROP_TYPE, ctypes.byref(none_val), 4,
+        )
+        zero = ctypes.c_int(0)
+        dwmapi.DwmSetWindowAttribute(
+            hwnd, _DWMWA_MICA_EFFECT, ctypes.byref(zero), 4,
+        )
+    except Exception:
+        pass
+
+
 def _apply_window_effect(window, key: str) -> None:
     """
     Toggle the window backdrop + transparency stylesheet on *window*.
@@ -276,6 +310,8 @@ def _apply_window_effect(window, key: str) -> None:
     else:
         if callable(set_mica):
             set_mica(False)  # restores solid light/dark background colour
+        if hwnd:
+            _disable_backdrop(hwnd)
         window.setStyleSheet("")
 
     if hwnd:

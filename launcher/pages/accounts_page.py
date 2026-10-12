@@ -13,8 +13,6 @@ from qfluentwidgets import (
     BodyLabel,
     FluentIcon,
     LineEdit,
-    MessageBox,
-    MessageBoxBase,
     PrimaryPushButton,
     PushButton,
     SubtitleLabel,
@@ -23,33 +21,36 @@ from qfluentwidgets import (
 
 from ..accounts import Account, AccountStore, AuthError
 from ..constants import ELY_CLIENT_ID
+from ..cove_dialog import CoveConfirm, CoveFormDialog
 from ..page_scroll import scrollable_page_root
 from ..workers_net import ElyLoginThread, MsLoginThread
 
 
-class _OfflineDialog(MessageBoxBase):
+class _OfflineDialog(CoveFormDialog):
     """Small modal to enter an offline player name."""
 
     def __init__(self, parent) -> None:
-        super().__init__(parent)
-        self.viewLayout.addWidget(SubtitleLabel("Add offline account"))
+        super().__init__("Add offline account", parent, width=440,
+                         ok_text="Add", cancel_text="Cancel")
         self.name_edit = LineEdit()
         self.name_edit.setPlaceholderText("Player name")
         self.name_edit.setMaxLength(16)
         self.viewLayout.addWidget(self.name_edit)
-        self.yesButton.setText("Add")
-        self.cancelButton.setText("Cancel")
 
     def validate(self) -> bool:  # noqa: N802 - qfw API
-        return bool(self.name_edit.text().strip())
+        if not self.name_edit.text().strip():
+            self.set_error("Enter a player name.")
+            return False
+        self.set_error("")
+        return True
 
 
-class _ElyCodeDialog(MessageBoxBase):
+class _ElyCodeDialog(CoveFormDialog):
     """Modal showing the one-time Ely.by device code + verification page."""
 
     def __init__(self, parent, verification_uri: str, user_code: str) -> None:
-        super().__init__(parent)
-        self.viewLayout.addWidget(SubtitleLabel("Ely.by login"))
+        super().__init__("Ely.by login", parent, width=480,
+                         ok_text="Open in browser", cancel_text="Cancel login")
         self.viewLayout.addWidget(
             BodyLabel("Open the page below in your browser and enter the code:")
         )
@@ -67,8 +68,6 @@ class _ElyCodeDialog(MessageBoxBase):
                 "password - it only issues a limited token to the launcher."
             )
         )
-        self.yesButton.setText("Open in browser")
-        self.cancelButton.setText("Cancel login")
 
 
 class AccountsPage(QWidget):
@@ -204,19 +203,17 @@ class AccountsPage(QWidget):
             pass
 
     def _on_remove_refresh_done(self) -> None:
-        """Rebuild the accounts list after a remove (deferred to let the
-        confirmation MessageBox finish tearing down first)."""
+        """Rebuild the accounts list after a remove."""
         self.refresh()
         self._log("Account removed.")
 
     def _on_remove(self) -> None:
         """Remove the selected account after user confirmation.
 
-        The confirmation MessageBox and the subsequent list rebuild are both
-        deferred to the next idle tick.  Showing a modal dialog - and then
-        immediately mutating the list widget inside its exec() return - races
-        with the QListWidget viewport repaint and produces a flood of
-        'QPainter::... Painter not active' warnings.
+        The confirmation runs on the next idle tick so the click cycle
+        finishes before the modal opens; the list rebuild happens directly
+        afterwards (native Cove dialogs have no fade-out animation to wait
+        for).
         """
         from PyQt6.QtCore import QTimer
 
@@ -226,22 +223,18 @@ class AccountsPage(QWidget):
         account = self._store.get(uuid_str)
 
         def _perform() -> None:
-            # Parent the dialog to the top-level window, not this page.
-            # A child-of-self dialog shares the page's paint queue, and the
-            # Fluent-style fade-in effect (QWidgetEffectSourcePrivate) grabs a
-            # pixmap of the parent while the list view is mid-repaint -> the
-            # 'QPainter::... Painter not active' spam.  Using window() makes the
-            # dialog a sibling so its paint queue is independent.
-            confirmed = MessageBox(
+            # Parent the dialog to the top-level window, not this page, so the
+            # modal mask covers the whole launcher.
+            confirmed = CoveConfirm.ask(
+                self.window(),
                 "Remove account",
                 f"Remove '{account.name}' from the launcher?" if account else "Remove?",
-                self.window(),
-            ).exec()
+                ok="Remove",
+                cancel="Cancel",
+            )
             if confirmed:
                 self._store.remove(uuid_str)
-                # 60 ms is enough for the dialog's fade-out to finish without
-                # adding perceptible lag for the user.
-                QTimer.singleShot(60, self._on_remove_refresh_done)
+                self._on_remove_refresh_done()
 
         QTimer.singleShot(0, _perform)
 
@@ -249,19 +242,13 @@ class AccountsPage(QWidget):
         from PyQt6.QtCore import QTimer
 
         def _perform() -> None:
-            # Hide the list widget so the dialog's Fluent fade effect can't
-            # grab a pixmap of it mid-repaint (which causes "QPainter not
-            # active" / "A paint device can only be painted by one painter").
-            self.list_widget.setVisible(False)
-            try:
-                dialog = _OfflineDialog(self.window())
-                if dialog.exec():
-                    account = self._store.add_offline(dialog.name_edit.text())
-                    self._log(f"Added offline account '{account.name}'.")
-                    self.refresh()
-            finally:
-                # Always re-show the list, even if refresh() raised.
-                self.list_widget.setVisible(True)
+            # Native Cove dialog: no Fluent fade effect, so the list can stay
+            # visible behind the modal.
+            dialog = _OfflineDialog(self.window())
+            if dialog.exec():
+                account = self._store.add_offline(dialog.name_edit.text())
+                self._log(f"Added offline account '{account.name}'.")
+                self.refresh()
 
         # Defer to idle so the click cycle completes before the modal opens.
         QTimer.singleShot(0, _perform)
@@ -409,6 +396,14 @@ class AccountsPage(QWidget):
     @staticmethod
     def _now_iso() -> str:  # pragma: no cover - helper kept for future use
         return datetime.now().isoformat()
+
+    def refresh_theme(self) -> None:
+        """Re-apply theme-dependent stylesheet on live theme change."""
+        from ..theme import item_sel_bg
+        self.list_widget.setStyleSheet(
+            "QListWidget { background: transparent; outline: none; border: none; }"
+            f"QListWidget::item:selected {{ background: {item_sel_bg()}; }}"
+        )
 
 
 # __CHUNK2__

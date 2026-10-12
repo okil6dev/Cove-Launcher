@@ -43,18 +43,24 @@ def scrollable_page_root(
     scroll.setFrameShape(QFrame.Shape.NoFrame)
     scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
     scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-    scroll.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
     scroll.viewport().setAutoFillBackground(False)
+    scroll.viewport().setStyleSheet("background: transparent; border: none;")
     # Narrow selectors on purpose: anything deeper keeps its own card
     # background (a broad "QScrollArea QWidget" rule would blank the cards).
     scroll.setStyleSheet(
         "QScrollArea#pageScroll { background: transparent; border: none; }"
-        "QScrollArea#pageScroll > QWidget { background: transparent; }"
+        "QScrollArea#pageScroll > QWidget { background: transparent; border: none; }"
+        "QWidget#pageScrollInner { background: transparent; border: none; }"
     )
 
     inner = QWidget()
-    inner.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+    inner.setObjectName("pageScrollInner")
+    inner.setStyleSheet("QWidget#pageScrollInner { background: transparent; border: none; }")
     scroll.setWidget(inner)
+    # QScrollArea.setWidget() internally forces autoFillBackground=True on the inner
+    # widget, causing Qt to fill it with QPalette::Window (black) in light/dark mode.
+    # Turn it off after setWidget so the themed window background shows through cleanly:
+    inner.setAutoFillBackground(False)
     outer.addWidget(scroll)
 
     root = QVBoxLayout(inner)

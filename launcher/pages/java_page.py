@@ -423,7 +423,6 @@ class _JavaFlavorCard(QFrame):
     def _on_delete(self) -> None:
         """Remove the installed JDK folder for the selected version."""
         from PyQt6.QtCore import QTimer
-        from qfluentwidgets import MessageBox
 
         if self._worker and self._worker.isRunning():
             return
@@ -435,23 +434,17 @@ class _JavaFlavorCard(QFrame):
         fname = self._flavor["name"]
 
         def _perform() -> None:
-            # Hide the card area so the dialog's Fluent fade effect can't grab
-            # a pixmap of it mid-repaint (which causes "QPainter not active").
-            self.setVisible(False)
-            try:
-                # Parent to the *window* so the dialog is a sibling of the
-                # card, not a child.
-                box = MessageBox(
-                    "Delete Java runtime?",
-                    f"Remove {fname} Java {ver} from disk?\n\n{folder}\n\n"
-                    "Instances pointing at this runtime will fall back to "
-                    "Mojang's bundled JVM on their next launch.",
-                    self.window(),
-                )
-                box.yesButton.setText("Delete")
-                box.cancelButton.setText("Keep")
-                if not box.exec():
-                    return
+            from ..cove_dialog import CoveConfirm
+            if not CoveConfirm.ask(
+                self.window(),
+                "Delete Java runtime?",
+                f"Remove {fname} Java {ver} from disk?\n\n{folder}\n\n"
+                "Instances pointing at this runtime will fall back to "
+                "Mojang's bundled JVM on their next launch.",
+                ok="Delete",
+                cancel="Keep",
+            ):
+                return
 
                 import shutil
 
@@ -473,9 +466,6 @@ class _JavaFlavorCard(QFrame):
                 self._toast("success", "Java removed",
                             f"{fname} Java {ver} deleted.", 5000)
                 self._refresh_install_status()
-            finally:
-                # Always re-show the card, even if refresh raised.
-                self.setVisible(True)
 
         # Defer to idle so the click cycle completes before the modal opens.
         QTimer.singleShot(0, _perform)

@@ -51,7 +51,7 @@ from ..workers_net import ModInstallThread, ModSearchThread, ModDescriptionThrea
 # the global palette in ``launcher.theme``).
 # ---------------------------------------------------------------------------
 def _build_qss() -> str:
-    from ..theme import fg, fg_muted, fg_faint, fg_disabled
+    from ..theme import fg, fg_muted, fg_faint, fg_disabled, hairline, item_sel_bg, menu_bg
 
     return f"""
 #modsPage {{ background: transparent; border: none; outline: none; border-width: 0; }}
@@ -109,7 +109,7 @@ QPushButton:disabled {{ color: {fg_disabled()}; }}
 QWidget {{ background: transparent; border: none; }}
 QStackedWidget {{ background: transparent; border: none; }}
 QComboBox::drop-down {{ background: transparent; border: none; }}
-QComboBox QAbstractItemView {{ background: transparent; color: {fg_muted()}; border: none; selection-background-color: transparent; }}
+QComboBox QAbstractItemView {{ background: {menu_bg()}; color: {fg()}; border: 1px solid {hairline()}; selection-background-color: {item_sel_bg()}; selection-color: {fg()}; }}
 QScrollBar:vertical {{ background: transparent; width: 12px; border-radius: 6px; border: none; }}
 QScrollBar::handle:vertical {{ background: transparent; border-radius: 6px; min-height: 20px; border: none; }}
 QScrollBar::handle:vertical:hover {{ background: transparent; }}

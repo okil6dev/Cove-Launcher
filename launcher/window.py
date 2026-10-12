@@ -19,7 +19,6 @@ from qfluentwidgets import (
     FluentIcon,
     InfoBar,
     InfoBarPosition,
-    MessageBox,
     MSFluentWindow,
 )
 
@@ -426,33 +425,28 @@ class LauncherWindow(MSFluentWindow):
         self._splash_chrome_hidden = False
 
     def _fade_current_page(self, index: int) -> None:
-        """Animate a quick opacity fade on the newly shown page."""
-        from PyQt6.QtCore import QPropertyAnimation, QEasingCurve
-        from PyQt6.QtWidgets import QGraphicsOpacityEffect
-
-        widget = self.stackedWidget.widget(index)
+        # No-op now: the slide animation itself is neutered to zero distance
+        # (see _build_pages), so there is no sliding paint to smear and no
+        # stranded pages.  Kept as the slot.  No QSS / colours touched.
+        try:
+            widget = self.stackedWidget.widget(index)
+        except Exception:
+            return
         if widget is None:
             return
-        widget.setGraphicsEffect(None)
-        effect = QGraphicsOpacityEffect(widget)
-        effect.setOpacity(0.35)
-        widget.setGraphicsEffect(effect)
-
-        anim = QPropertyAnimation(effect, b"opacity", self)
-        anim.setDuration(220)
-        anim.setStartValue(0.35)
-        anim.setEndValue(1.0)
-        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
-
-        def _cleanup() -> None:
+        try:
             widget.setGraphicsEffect(None)
-            widget._cove_fade_effect = None
-            widget._cove_fade_anim = None
-
-        anim.finished.connect(_cleanup)
-        anim.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
-        widget._cove_fade_anim = anim
-        widget._cove_fade_effect = effect
+        except Exception:
+            pass
+        for attr in ("_cove_fade_effect", "_cove_fade_anim"):
+            try:
+                setattr(widget, attr, None)
+            except Exception:
+                pass
+        try:
+            widget.update()
+        except Exception:
+            pass
 
     def _open_command_palette(self) -> None:
         """Build + show the Ctrl+K command palette."""
@@ -602,6 +596,20 @@ class LauncherWindow(MSFluentWindow):
         )
 
         # Wiring ---------------------------------------------------------------
+        # Disable PopUpAniStackedWidget's sliding pop-up animation so tab switching
+        # is instant and clean, preventing visual smearing and drawing artifacts
+        # on transparent/themed pages.
+        try:
+            self.stackedWidget.setAnimationEnabled(False)
+            view = self.stackedWidget.view
+            for _info in list(getattr(view, "aniInfos", [])):
+                try:
+                    _info.deltaX = 0
+                    _info.deltaY = 0
+                except Exception:
+                    pass
+        except Exception:
+            pass
         self.instances_page.playRequested.connect(self._on_play)
         self.instances_page.newRequested.connect(self._on_new_instance)
         self.instances_page.importRequested.connect(self._on_import_pack)
@@ -703,10 +711,8 @@ class LauncherWindow(MSFluentWindow):
         )
 
     def _show_box(self, title: str, content: str) -> None:
-        box = MessageBox(title, content, self)
-        box.yesButton.setText("OK")
-        box.cancelButton.hide()
-        box.exec()
+        from .cove_dialog import CoveConfirm
+        CoveConfirm.info(self, title, content)
 
     def _center_on_screen(self) -> None:
         """Center the window on the primary screen."""
@@ -800,6 +806,8 @@ class LauncherWindow(MSFluentWindow):
         for page in (
             getattr(self, "instances_page", None),
             getattr(self, "mods_page", None),
+            getattr(self, "server_page", None),
+            getattr(self, "accounts_page", None),
             getattr(self, "java_page", None),
             getattr(self, "settings_page", None),
             getattr(self, "skins_page", None),
@@ -1101,24 +1109,18 @@ class LauncherWindow(MSFluentWindow):
             return
 
         def _perform() -> None:
-            # Hide the instances page so the dialog's Fluent fade effect can't
-            # grab a pixmap of it mid-repaint (which causes "QPainter not
-            # active").
-            self.instances_page.setVisible(False)
-            try:
-                confirmed = MessageBox(
-                    "Delete instance",
-                    f"Delete instance '{name}' and all its files?\nThis cannot be undone.",
-                    self.window(),
-                ).exec()
-                if not confirmed:
-                    return
-                self.registry.delete(name)
-                self.instances_page.refresh(self.registry.list())
-                self.log(f"Instance '{name}' deleted.")
-            finally:
-                # Always re-show the page, even if refresh() raised.
-                self.instances_page.setVisible(True)
+            from .cove_dialog import CoveConfirm
+            confirmed = CoveConfirm.ask(
+                self.window(),
+                "Delete instance",
+                f"Delete instance '{name}' and all its files?\nThis cannot be undone.",
+                ok="Delete",
+            )
+            if not confirmed:
+                return
+            self.registry.delete(name)
+            self.instances_page.refresh(self.registry.list())
+            self.log(f"Instance '{name}' deleted.")
 
         QTimer.singleShot(0, _perform)
 
@@ -1484,19 +1486,19 @@ class LauncherWindow(MSFluentWindow):
 
     # ------------------------------------------------------------ lifecycle --
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt naming
-        # Dismiss any Fluent modal before the window tears down.  Without this,
-        # closing the window while a MessageBox fade-out animation is running
-        # (100 ms) leaves exec() spinning forever and freezes the process.
+        # Dismiss any Cove modal before the window tears down.
         _dismiss_child_modals(self)
 
         game_running = self._launcher is not None and self._launcher.isRunning()
         if game_running:
-            confirmed = MessageBox(
+            from .cove_dialog import CoveConfirm
+            confirmed = CoveConfirm.ask(
+                self,
                 "Game still running",
                 "Minecraft is still running.\n\nClose the launcher anyway? "
                 "(The game keeps running.)",
-                self,
-            ).exec()
+                ok="Close anyway",
+            )
             if not confirmed:
                 event.ignore()
                 return

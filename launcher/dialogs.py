@@ -6,10 +6,10 @@ from qfluentwidgets import (
     BodyLabel,
     ComboBox,
     LineEdit,
-    MessageBoxBase,
     SubtitleLabel,
 )
 
+from .cove_dialog import CoveFormDialog
 from .constants import (
     DEFAULT_RAM_GB,
     LATEST_LOADER_BUILD_SENTINEL,
@@ -19,12 +19,12 @@ from .constants import (
 from .instances import validate_name
 
 
-class NewInstanceDialog(MessageBoxBase):
+class NewInstanceDialog(CoveFormDialog):
     """Create-instance wizard: name, version, loader, loader build, RAM."""
 
     def __init__(self, versions: list[str], max_ram_gb: int, parent) -> None:
-        super().__init__(parent)
-        self.viewLayout.addWidget(SubtitleLabel("New instance"))
+        super().__init__("New instance", parent, width=480,
+                         ok_text="Create", cancel_text="Cancel")
 
         self.viewLayout.addWidget(SubtitleLabel("Name"))
         self.name_edit = LineEdit()
@@ -48,13 +48,6 @@ class NewInstanceDialog(MessageBoxBase):
         self.build_combo = ComboBox()
         self._set_build_placeholder("Latest build (auto)")
         self.viewLayout.addWidget(self.build_combo)
-
-        self.error_label = BodyLabel("")
-        self.error_label.setVisible(False)
-        self.viewLayout.addWidget(self.error_label)
-
-        self.yesButton.setText("Create")
-        self.cancelButton.setText("Cancel")
 
         self._versions = versions
         self._max_ram_gb = max_ram_gb
@@ -155,43 +148,43 @@ class NewInstanceDialog(MessageBoxBase):
         try:
             validate_name(self.name_edit.text())
         except Exception as exc:
-            self.error_label.setText(str(exc))
-            self.error_label.setVisible(True)
+            self.set_error(str(exc))
             return False
+        self.set_error("")
         return True
 
 
-class ImportNameDialog(MessageBoxBase):
+class ImportNameDialog(CoveFormDialog):
     """Ask for an instance name when importing a modpack."""
 
     def __init__(self, suggested_name: str, parent) -> None:
-        super().__init__(parent)
-        self.viewLayout.addWidget(SubtitleLabel("Import modpack"))
+        super().__init__("Import modpack", parent, width=460,
+                         ok_text="Import", cancel_text="Cancel")
         self.viewLayout.addWidget(SubtitleLabel("Instance name"))
         self.name_edit = LineEdit()
         self.name_edit.setText(suggested_name)
         self.viewLayout.addWidget(self.name_edit)
-        self.yesButton.setText("Import")
-        self.cancelButton.setText("Cancel")
 
     def validate(self) -> bool:  # noqa: N802 - qfw API
         try:
             validate_name(self.name_edit.text())
-            return True
-        except Exception:
+        except Exception as exc:
+            self.set_error(str(exc))
             return False
+        self.set_error("")
+        return True
 
 
-class NewServerDialog(MessageBoxBase):
+class NewServerDialog(CoveFormDialog):
     """Ask for a server name; the folder is created under SERVERS_DIR."""
 
     def __init__(self, parent) -> None:
-        super().__init__(parent)
         from .constants import SERVERS_DIR
         from .servers import validate_name as validate_server_name
 
         self._validate = validate_server_name
-        self.viewLayout.addWidget(SubtitleLabel("New server"))
+        super().__init__("New server", parent, width=520,
+                         ok_text="Create", cancel_text="Cancel")
         hint = BodyLabel(
             "A folder will be created under:\n"
             f"{SERVERS_DIR}\\<name>\n"
@@ -204,20 +197,14 @@ class NewServerDialog(MessageBoxBase):
         self.name_edit.setPlaceholderText("My Server")
         self.name_edit.setMaxLength(64)
         self.viewLayout.addWidget(self.name_edit)
-        self.error_label = BodyLabel("")
-        self.error_label.setVisible(False)
-        self.viewLayout.addWidget(self.error_label)
-        self.yesButton.setText("Create")
-        self.cancelButton.setText("Cancel")
 
     def validate(self) -> bool:  # noqa: N802 - qfw API
         try:
             self._validate(self.name_edit.text())
         except Exception as exc:
-            self.error_label.setText(str(exc))
-            self.error_label.setVisible(True)
+            self.set_error(str(exc))
             return False
-        self.error_label.setVisible(False)
+        self.set_error("")
         return True
 
 

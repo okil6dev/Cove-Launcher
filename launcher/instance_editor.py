@@ -47,7 +47,6 @@ from qfluentwidgets import (
     InfoBar,
     InfoBarPosition,
     LineEdit,
-    MessageBox,
     MSFluentWindow,
     PushButton,
     SubtitleLabel,
@@ -73,6 +72,7 @@ from .instances import (
     validate_name,
 )
 from .system_info import get_total_ram_gb
+from .workers import LoaderVersionsThread
 from .pages.instances_page import _make_cube_icon
 from . import moddb
 from . import styles
@@ -81,28 +81,43 @@ from . import external_mods
 # Each page widget gets a unique objectName so MSFluentWindow.addSubInterface
 # registers a distinct navigation routeKey (the method raises if it's empty and
 # silently breaks the nav rail if names collide — every page used "editorRoot").
-_ROOT_QSS = """
+def _root_qss() -> str:
+    from .theme import (
+        accent_edge,
+        fg,
+        fg_faint,
+        fg_muted,
+        hairline,
+        item_hover_bg,
+        item_sel_bg,
+        menu_bg,
+    )
+    return f"""
 QWidget#instancePage, QWidget#modsPage, QWidget#installPage,
-QWidget#stylePage { background: transparent; border: none; }
-QLabel#infoValue { color: #e6f2f2; }
-QLabel#infoKey   { color: #9fb4bd; }
-QListWidget#modList { background: transparent; border: none; }
-QListWidget#extFolderList { background: transparent; border: none; }
-QLabel#emptyHint   { color: #7d939d; font-size: 12px; }
-QWidget { background: transparent; border: none; }
-QComboBox, QLineEdit, QPushButton { background: transparent; color: #cfd8dc; border: none; border-radius: 5px; padding: 6px 12px; }
-QComboBox:hover, QPushButton:hover { border: none; }
-QComboBox::drop-down { background: transparent; border: none; }
-QComboBox QAbstractItemView { background: transparent; color: #cfd8dc; border: none; selection-background-color: #264f59; }
-QScrollBar:vertical { background: transparent; width: 12px; border-radius: 6px; border: none; }
-QScrollBar::handle:vertical { background: #264f59; border-radius: 6px; min-height: 20px; border: none; }
-QScrollBar::handle:vertical:hover { background: #316371; }
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
-QScrollBar:horizontal { background: transparent; height: 12px; border-radius: 6px; border: none; }
-QScrollBar::handle:horizontal { background: #264f59; border-radius: 6px; min-width: 20px; border: none; }
-QScrollBar::handle:horizontal:hover { background: #316371; }
-QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0px; }
+QWidget#stylePage {{ background: transparent; border: none; }}
+QLabel#infoValue {{ color: {fg()}; }}
+QLabel#infoKey   {{ color: {fg_muted()}; }}
+QListWidget#modList, QListWidget#extFolderList {{ background: transparent; border: none; color: {fg()}; }}
+QListWidget#modList::item, QListWidget#extFolderList::item {{ color: {fg()}; }}
+QListWidget#modList::item:selected, QListWidget#extFolderList::item:selected {{ background: {item_sel_bg()}; color: {fg()}; }}
+QListWidget#modList::item:hover:!selected, QListWidget#extFolderList::item:hover:!selected {{ background: {item_hover_bg()}; color: {fg()}; }}
+QLabel#emptyHint   {{ color: {fg_faint()}; font-size: 12px; }}
+QWidget {{ background: transparent; border: none; }}
+QComboBox, QLineEdit, QPushButton {{ background: transparent; color: {fg()}; border: none; border-radius: 5px; padding: 6px 12px; }}
+QComboBox:hover, QPushButton:hover {{ border: none; }}
+QComboBox::drop-down {{ background: transparent; border: none; }}
+QComboBox QAbstractItemView {{ background: {menu_bg()}; color: {fg()}; border: 1px solid {hairline()}; selection-background-color: {item_sel_bg()}; selection-color: {fg()}; }}
+QScrollBar:vertical {{ background: transparent; width: 12px; border-radius: 6px; border: none; }}
+QScrollBar::handle:vertical {{ background: {accent_edge()}; border-radius: 6px; min-height: 20px; border: none; }}
+QScrollBar::handle:vertical:hover {{ background: {accent_edge()}; }}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; }}
+QScrollBar:horizontal {{ background: transparent; height: 12px; border-radius: 6px; border: none; }}
+QScrollBar::handle:horizontal {{ background: {accent_edge()}; border-radius: 6px; min-width: 20px; border: none; }}
+QScrollBar::handle:horizontal:hover {{ background: {accent_edge()}; }}
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0px; }}
 """
+
+_ROOT_QSS = _root_qss()
 
 
 class _InstanceStatsThread(QThread):
@@ -208,13 +223,16 @@ class InstanceEditorWindow(MSFluentWindow):
         self.resize(*get_size("instance_editor"))
         self._instance = instance
         self._registry = registry
-        self.setStyleSheet(_ROOT_QSS)
 
         # Match the theme the user picked in Settings (light / dark / mica /
         # acrylic) instead of forcing an acrylic/Mica backdrop on this window.
+        # apply_theme() FIRST: it sets theme._current_key (which _root_qss()
+        # reads) and, on plain light/dark, clears the window stylesheet --
+        # so the QSS must be installed after it, not before.
         from . import theme
 
         theme.apply_theme(theme.current_theme(), self)
+        self.refresh_theme()
         self._theme_applied = False  # re-applied on show (window effect needs it)
 
         # Create the shared widgets once so the Instance and Settings pages can
@@ -233,6 +251,10 @@ class InstanceEditorWindow(MSFluentWindow):
         self._build_installation_page()
         self._build_custom_style_page()
         self._build_footer()
+        try:
+            self.stackedWidget.setAnimationEnabled(False)
+        except Exception:
+            pass
 
         # Default to the editable Instance page (name/version immediately visible).
         self.stackedWidget.setCurrentIndex(0)
@@ -288,15 +310,26 @@ class InstanceEditorWindow(MSFluentWindow):
         for delay in (0, 30, 90, 200):
             QTimer.singleShot(delay, self._center_on_screen)
 
+    def refresh_theme(self) -> None:
+        """Rebuild theme-dependent QSS (called on live theme change)."""
+        try:
+            self.setStyleSheet(_root_qss())
+        except Exception:
+            pass
+
     def showEvent(self, event) -> None:  # noqa: N802 - Qt API
         # The DWM backdrop can only be applied reliably once the window is
         # being shown, mirroring the main window's behaviour.
         super().showEvent(event)
         from . import theme
 
+        # Apply the backdrop FIRST: plain light/dark clears the window
+        # stylesheet (setStyleSheet("")), which would wipe the QSS that
+        # refresh_theme() installs when it runs before apply_theme().
         if not self._theme_applied:
             theme.apply_theme(theme.current_theme(), self)
             self._theme_applied = True
+        self.refresh_theme()
         # Re-centre now the real geometry is known, and again over the next
         # few frames so the settled Fluent layout cannot undo it.
         if not getattr(self, "_cove_centered", False):
@@ -318,6 +351,11 @@ class InstanceEditorWindow(MSFluentWindow):
         stats = getattr(self, "_stats_thread", None)
         if stats is not None and stats.isRunning():
             stats.wait(3000)
+        try:
+            from .threading_utils import retire
+            retire(getattr(self, "_loader_fetch", None))
+        except Exception:
+            pass
         super().closeEvent(event)
 
     # -- shared widget factory ----------------------------------------------
@@ -363,6 +401,24 @@ class InstanceEditorWindow(MSFluentWindow):
         self.build_combo = EditableComboBox()
         self.build_combo.setPlaceholderText("empty = latest")
         self.build_combo.setText(inst.loader_build or "")
+        # NeoForge version listing + one-click update ---------------------
+        # The build combo stays free-text (empty = latest at install), but
+        # for NeoForge we list every stable build for the chosen MC version
+        # and offer an "Update NeoForge" button that pins the newest one.
+        self._loader_fetch = None
+        self._neo_builds: list[str] = []
+        self._neo_latest = ""
+        self._neo_fetch_key: tuple[str, str] | None = None
+        self._neo_update_pending = False
+        self.neoforge_update_button = PushButton(FluentIcon.SYNC, "Update NeoForge")
+        self.neoforge_update_button.setToolTip(
+            "Fetch the newest NeoForge build for this game version and install it"
+        )
+        self.neoforge_update_button.setVisible((inst.loader_id or "vanilla") == "neoforge")
+        self.neo_status = CaptionLabel("")
+        self.neo_status.setObjectName("emptyHint")
+        self.neo_status.setWordWrap(True)
+        self.neo_status.setVisible(False)
         # Icon picker state ------------------------------------------------
         self.on_saved = None            # window hook: refresh grid on save
         self._pending_icon_path: str | None = inst.icon_path
@@ -583,7 +639,12 @@ class InstanceEditorWindow(MSFluentWindow):
         col2 = QVBoxLayout()
         col2.setSpacing(4)
         col2.addWidget(BodyLabel("Loader build"))
-        col2.addWidget(self.build_combo)
+        build_row = QHBoxLayout()
+        build_row.setSpacing(6)
+        build_row.addWidget(self.build_combo, stretch=1)
+        build_row.addWidget(self.neoforge_update_button)
+        col2.addLayout(build_row)
+        col2.addWidget(self.neo_status)
         row.addLayout(col1, stretch=1)
         row.addLayout(col2, stretch=1)
         lay.addLayout(row)
@@ -623,6 +684,11 @@ class InstanceEditorWindow(MSFluentWindow):
         self.java_browse.clicked.connect(self._browse_java)
         self.java_test.clicked.connect(self._test_java)
         self.java_detect.clicked.connect(self._detect_java)
+        self.loader_combo.currentIndexChanged.connect(self._on_loader_selection_changed)
+        self.version_combo.currentTextChanged.connect(
+            lambda _text: self._on_loader_selection_changed())
+        self.neoforge_update_button.clicked.connect(self._on_update_neoforge)
+        self._on_loader_selection_changed()  # list NeoForge builds on open
         self.icon_choose.clicked.connect(self._choose_icon)
         self.icon_reset.clicked.connect(self._reset_icon)
         self._update_icon_preview()
@@ -826,53 +892,45 @@ class InstanceEditorWindow(MSFluentWindow):
         name = item.data(Qt.ItemDataRole.UserRole)
 
         def _perform() -> None:
-            # Hide the mod list so the dialog's Fluent fade effect can't grab
-            # a pixmap of it mid-repaint (which causes "QPainter not active").
-            self.mod_list.setVisible(False)
-            try:
-                entry = external_mods.source_for(self._instance, name)
-                if entry is not None:
-                    # Externally managed: unlink it from this instance only.
-                    # The user's file in the other folder must survive.
-                    box = MessageBox(
-                        "Remove external mod",
-                        f"Remove '{name}' from this instance?\n\n"
-                        "It will be unlinked from the mods folder. "
-                        f"Your original file is kept at:\n{entry.source}",
-                        self.window(),
-                    )
-                    if not box.exec():
-                        return
-                    try:
-                        external_mods.remove_entry(self._instance, name)
-                    except OSError as exc:  # noqa: BLE001
-                        self._toast("error", "Remove failed", str(exc))
-                        return
-                    self._toast(
-                        "success", "External mod removed",
-                        "Your original file was not deleted.",
-                    )
-                    self.refresh_mods()
-                    return
-                # Parent to self.window() (top-level) so the dialog is a
-                # sibling of the editor, not a child of the mod list page.
-                box = MessageBox(
-                    "Delete mod",
-                    f"Delete '{name}' from this instance?",
+            from .cove_dialog import CoveConfirm
+            entry = external_mods.source_for(self._instance, name)
+            if entry is not None:
+                # Externally managed: unlink it from this instance only.
+                # The user's file in the other folder must survive.
+                if not CoveConfirm.ask(
                     self.window(),
-                )
-                if not box.exec():
+                    "Remove external mod",
+                    f"Remove '{name}' from this instance?\n\n"
+                    "It will be unlinked from the mods folder. "
+                    f"Your original file is kept at:\n{entry.source}",
+                    ok="Remove",
+                ):
                     return
                 try:
-                    moddb.remove_mod(self._instance.mods_dir, name)
-                except Exception as exc:  # noqa: BLE001
-                    self._toast("error", "Delete failed", str(exc))
+                    external_mods.remove_entry(self._instance, name)
+                except OSError as exc:  # noqa: BLE001
+                    self._toast("error", "Remove failed", str(exc))
                     return
-                self._toast("success", "Mod deleted", name)
+                self._toast(
+                    "success", "External mod removed",
+                    "Your original file was not deleted.",
+                )
                 self.refresh_mods()
-            finally:
-                # Always re-show the list, even if refresh_mods() raised.
-                self.mod_list.setVisible(True)
+                return
+            if not CoveConfirm.ask(
+                self.window(),
+                "Delete mod",
+                f"Delete '{name}' from this instance?",
+                ok="Delete",
+            ):
+                return
+            try:
+                moddb.remove_mod(self._instance.mods_dir, name)
+            except Exception as exc:  # noqa: BLE001
+                self._toast("error", "Delete failed", str(exc))
+                return
+            self._toast("success", "Mod deleted", name)
+            self.refresh_mods()
 
         # Defer the whole action to the next idle tick so the click/mouse-release
         # cycle completes before the modal opens.
@@ -963,32 +1021,26 @@ class InstanceEditorWindow(MSFluentWindow):
         from PyQt6.QtCore import QTimer
 
         def _perform() -> None:
+            from .cove_dialog import CoveConfirm
             folder = self._selected_external_folder()
             if not folder:
                 return
-            self.ext_list.setVisible(False)
-            try:
-                box = MessageBox(
-                    "Remove external folder",
-                    f"Stop using mods from this folder?\n\n{folder}\n\n"
-                    "Its jars will be unlinked from this instance. "
-                    "The files in that folder are NOT deleted.",
-                    self.window(),
-                )
-                if not box.exec():
-                    return
-                result = external_mods.remove_folder(self._instance, folder)
-                self.refresh_external_folders()
-                self.refresh_mods()
-                self._toast(
-                    "success", "External folder removed",
-                    f"{result.removed} file(s) unlinked; originals kept.",
-                )
-            finally:
-                # Re-show via refresh so the list stays collapsed when empty
-                # (a bare setVisible(True) would leave a gap behind).
-                self.ext_list.setVisible(True)
-                self.refresh_external_folders()
+            if not CoveConfirm.ask(
+                self.window(),
+                "Remove external folder",
+                f"Stop using mods from this folder?\n\n{folder}\n\n"
+                "Its jars will be unlinked from this instance. "
+                "The files in that folder are NOT deleted.",
+                ok="Remove",
+            ):
+                return
+            result = external_mods.remove_folder(self._instance, folder)
+            self.refresh_external_folders()
+            self.refresh_mods()
+            self._toast(
+                "success", "External folder removed",
+                f"{result.removed} file(s) unlinked; originals kept.",
+            )
 
         QTimer.singleShot(0, _perform)
 
@@ -1172,6 +1224,162 @@ class InstanceEditorWindow(MSFluentWindow):
         self.java_result_label.setVisible(True)
         self._toast("success" if ok else "error",
                     "Java test", "Java is valid." if ok else detail)
+
+    # ------------------------------------------------- neoforge versions --
+    def _current_mc_version(self) -> str:
+        try:
+            return (self.version_combo.text() or "").strip() or self._instance.mc_version
+        except Exception:
+            return self._instance.mc_version
+
+    def _on_loader_selection_changed(self) -> None:
+        """Show the NeoForge controls only for NeoForge; list its builds."""
+        try:
+            lid = str(self.loader_combo.currentData() or "vanilla")
+        except Exception:
+            lid = "vanilla"
+        is_neo = lid == "neoforge"
+        self.neoforge_update_button.setVisible(is_neo)
+        self.neo_status.setVisible(is_neo and bool(self.neo_status.text()))
+        if not is_neo:
+            self._neo_update_pending = False
+            fetch = getattr(self, "_loader_fetch", None)
+            if fetch is not None:
+                try:
+                    from .threading_utils import retire
+                    retire(fetch)
+                except Exception:
+                    pass
+                self._loader_fetch = None
+            return
+        mc = self._current_mc_version()
+        if self._neo_fetch_key == ("neoforge", mc) and self._neo_builds:
+            return  # already listed for this MC version
+        self._fetch_neoforge_builds(mc)
+
+    def _fetch_neoforge_builds(self, mc_version: str) -> None:
+        from .threading_utils import retire
+        retire(getattr(self, "_loader_fetch", None))
+        self._loader_fetch = None
+        self._neo_fetch_key = ("neoforge", mc_version)
+        self.neo_status.setText(f"Loading NeoForge builds for {mc_version}…")
+        self.neo_status.setVisible(True)
+        self.build_combo.setEnabled(False)
+        self.neoforge_update_button.setEnabled(False)
+        thread = LoaderVersionsThread("neoforge", mc_version, self)
+        thread.ready.connect(self._on_neo_builds_ready)
+        thread.failed.connect(self._on_neo_builds_failed)
+        self._loader_fetch = thread
+        thread.start()
+
+    def _on_neo_builds_ready(self, supported: bool, builds: list,
+                             latest: str) -> None:
+        from .threading_utils import retire
+        retire(getattr(self, "_loader_fetch", None))
+        self._loader_fetch = None
+        self.build_combo.setEnabled(True)
+        self.neoforge_update_button.setEnabled(True)
+        try:
+            lid = str(self.loader_combo.currentData() or "vanilla")
+        except Exception:
+            lid = "vanilla"
+        if lid != "neoforge":
+            self._neo_update_pending = False
+            return
+        if self._neo_fetch_key != ("neoforge", self._current_mc_version()):
+            self._neo_update_pending = False
+            return  # stale response from an older fetch
+        if not supported or not builds:
+            self._neo_builds = []
+            self._neo_latest = ""
+            self.neo_status.setText(
+                f"No NeoForge builds found for {self._current_mc_version()}.")
+            if self._neo_update_pending:
+                self._neo_update_pending = False
+                self._toast("warning", "NeoForge update",
+                            "No NeoForge builds found for this game version.")
+            return
+        self._neo_builds = [str(b) for b in builds]
+        self._neo_latest = str(latest or (builds[0] if builds else ""))
+        current = self.build_combo.text().strip()
+        self.build_combo.blockSignals(True)
+        try:
+            self.build_combo.clear()
+            for build in self._neo_builds:
+                self.build_combo.addItem(build)
+        finally:
+            self.build_combo.blockSignals(False)
+        self.build_combo.setText(current)  # keep user's typed build, if any
+        self.neo_status.setText(
+            f"{len(self._neo_builds)} builds — latest {self._neo_latest}. "
+            "Empty = latest at install.")
+        if self._neo_update_pending:
+            self._neo_update_pending = False
+            if current == self._neo_latest:
+                self._toast("success", "NeoForge",
+                            f"Already on latest ({self._neo_latest}).")
+            else:
+                self._apply_neoforge_update(self._neo_latest)
+
+    def _on_neo_builds_failed(self, message: str) -> None:
+        from .threading_utils import retire
+        retire(getattr(self, "_loader_fetch", None))
+        self._loader_fetch = None
+        self.build_combo.setEnabled(True)
+        self.neoforge_update_button.setEnabled(True)
+        self.neo_status.setText("Could not load NeoForge builds.")
+        if self._neo_update_pending:
+            self._neo_update_pending = False
+        self._toast("warning", "NeoForge builds", str(message)[:200])
+
+    def _on_update_neoforge(self) -> None:
+        """Pin the newest NeoForge build for this game version and install it."""
+        try:
+            lid = str(self.loader_combo.currentData() or "vanilla")
+        except Exception:
+            lid = "vanilla"
+        if lid != "neoforge":
+            return
+        mc = self._current_mc_version()
+        if self._neo_fetch_key == ("neoforge", mc) and self._neo_latest:
+            current = self.build_combo.text().strip()
+            if current == self._neo_latest:
+                self._toast("success", "NeoForge",
+                            f"Already on latest ({self._neo_latest}).")
+                return
+            self._apply_neoforge_update(self._neo_latest)
+            return
+        # Builds not loaded (or MC version changed) — fetch, then apply.
+        self._neo_update_pending = True
+        self._toast("info", "NeoForge update",
+                    f"Checking newest NeoForge for {mc}…")
+        self._fetch_neoforge_builds(mc)
+
+    def _apply_neoforge_update(self, latest: str) -> None:
+        inst = self._instance
+        inst.mc_version = self._current_mc_version()
+        inst.loader_id = "neoforge"
+        inst.loader_build = latest
+        inst.launch_version_id = None  # force reinstall on next Play
+        self.build_combo.setText(latest)
+        try:
+            self._registry.update(inst)
+        except Exception as exc:  # noqa: BLE001
+            self._toast("error", "Update failed", str(exc))
+            return
+        self._toast("success", "NeoForge updated",
+                    f"Pinned {latest} — reinstalling now.")
+        host = self.parentWidget()
+        start = getattr(host, "_start_install", None)
+        if callable(start):
+            try:
+                start(inst)
+            except Exception as exc:  # noqa: BLE001 - best effort
+                self._toast("warning", "NeoForge",
+                            f"Saved {latest}; reinstall on next Play ({exc}).")
+        else:
+            self._toast("info", "NeoForge",
+                        f"Saved {latest}; applies on next Play.")
 
     def gather_jvm_args(self) -> list[str]:
         raw = self.jvm_args_edit.text().strip()
@@ -1574,6 +1782,8 @@ class InstanceEditorWindow(MSFluentWindow):
                         os.path.realpath(old_dir) + os.sep):
                     setattr(inst, attr_path,
                             os.path.join(new_dir, os.path.basename(p)))
+        old_mc = inst.mc_version
+        old_build = inst.loader_build or ""
         new_version = (self.version_combo.text()
                        or "").strip() or inst.mc_version
         inst.mc_version = new_version
@@ -1585,9 +1795,9 @@ class InstanceEditorWindow(MSFluentWindow):
         # Changing version/loader invalidates the installed launch version;
         # the next Play will reinstall/verify the correct target.
         if inst.launch_version_id and (
-            inst.mc_version != new_version or raw_build != (inst.loader_build or "")
+            new_version != old_mc or raw_build != old_build
         ):
-            pass  # kept simple: launch id is refreshed at install time
+            inst.launch_version_id = None
 
         # -- runtime settings (shared widgets) ----------------------------
         inst.ram_gb = int(self.ram_combo.currentData() or inst.ram_gb)

@@ -67,7 +67,7 @@ def _chrome(dlg: QDialog) -> None:
 
 def _qss(transparent: bool = True) -> str:
     """Liquid-glass card: frosted fill, filled white buttons, hovers."""
-    from .theme import fg, fg_muted, hairline, is_dark_now
+    from .theme import card_bg, fg, fg_muted, field_bg, hairline, is_dark_now, menu_bg
 
     dark = is_dark_now()
     ac = _accent()
@@ -111,6 +111,12 @@ def _qss(transparent: bool = True) -> str:
              "padding:8px 11px;selection-background-color:" + ac + ";}")
     p.append("QLineEdit:hover,QComboBox:hover{background:" + card_hover + ";}")
     p.append("QLineEdit:focus,QComboBox:focus{border:1px solid " + ac + ";}")
+    p.append("QComboBox QAbstractItemView{outline:0;background:" + menu_bg()
+             + ";color:" + fg() + ";selection-background-color:" + ac
+             + ";selection-color:#0b1116;}")
+    p.append("QComboBox QAbstractItemView::item{padding:6px 10px;color:"
+             + fg() + ";}")
+    p.append("QComboBox:on{background:" + field_bg() + ";color:" + fg() + ";}")
     return "".join(p)
 
 

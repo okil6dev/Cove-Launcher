@@ -36,7 +36,6 @@ from qfluentwidgets import (
     BodyLabel,
     FluentIcon,
     LineEdit,
-    MessageBox,
     PrimaryPushButton,
     PushButton,
     SubtitleLabel,
@@ -455,13 +454,14 @@ class ServerPage(QWidget):
             self._toast("warning", "Server is running",
                         "Stop the server before deleting it.")
             return
-        box = MessageBox(
+        from ..cove_dialog import CoveConfirm
+        if not CoveConfirm.ask(
+            self.window(),
             "Delete server",
             f"Delete '{server.name}' and its whole folder?\n"
             f"{server.dir}\nThis cannot be undone.",
-            self.window(),
-        )
-        if not box.exec():
+            ok="Delete",
+        ):
             return
         self._registry.delete(server.name)
         self.refresh()
@@ -520,14 +520,15 @@ class ServerPage(QWidget):
             # The flag says yes but the file disagrees/missing: rewrite it.
             self._write_eula(server)
             return True
-        box = MessageBox(
+        from ..cove_dialog import CoveConfirm
+        if not CoveConfirm.ask(
+            self.window(),
             "Minecraft EULA",
             "Starting a Minecraft server means you accept the Minecraft "
             "EULA:\nhttps://aka.minecraft.net/eula\n\nAccept it for this "
             "server?",
-            self.window(),
-        )
-        if not box.exec():
+            ok="Accept",
+        ):
             return False
         self._write_eula(server)
         return True
@@ -630,6 +631,10 @@ class ServerPage(QWidget):
             self.status_label.setText("Stopped")
             self._update_controls()
         self._toast("error", "Server failed to start", message)
+
+    def refresh_theme(self) -> None:
+        """Re-apply theme-dependent stylesheet on live theme change."""
+        self.setStyleSheet(_build_qss())
 
 
 

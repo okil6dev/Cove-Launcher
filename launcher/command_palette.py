@@ -13,7 +13,6 @@ from typing import Callable
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QKeyEvent, QPainter
 from PyQt6.QtWidgets import (
-    QDialog,
     QFrame,
     QGraphicsDropShadowEffect,
     QListWidget,
@@ -23,6 +22,7 @@ from PyQt6.QtWidgets import (
 )
 from qfluentwidgets import SearchLineEdit, SubtitleLabel
 
+from .cove_dialog import CoveDialog
 from .theme import fg, fg_muted, hairline, is_dark_now, item_sel_bg
 
 
@@ -64,39 +64,13 @@ def fuzzy_score(query: str, text: str) -> int:
 
 # ── widget ────────────────────────────────────────────────────────────────────
 
-class CommandPalette(QDialog):
+class CommandPalette(CoveDialog):
     """Modal fuzzy-search overlay.  Enter runs, Esc cancels."""
 
     def __init__(self, parent: QWidget, commands: list[Command]) -> None:
-        super().__init__(parent)
+        super().__init__("Command Palette", parent, width=560)
         self._commands = commands
         self._filtered: list[Command] = []
-
-        self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog
-        )
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setModal(True)
-
-        root = QVBoxLayout(self)
-        root.setContentsMargins(24, 24, 24, 24)
-
-        card = QFrame()
-        card.setObjectName("paletteCard")
-        card.setStyleSheet(self._card_qss())
-        shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(40)
-        shadow.setOffset(0, 8)
-        shadow.setColor(QColor(0, 0, 0, 120))
-        card.setGraphicsEffect(shadow)
-
-        lay = QVBoxLayout(card)
-        lay.setContentsMargins(14, 12, 14, 12)
-        lay.setSpacing(10)
-
-        title = SubtitleLabel("Command Palette")
-        title.setStyleSheet(f"color: {fg()};")
-        lay.addWidget(title)
 
         self.search = SearchLineEdit()
         self.search.setPlaceholderText(
@@ -105,7 +79,7 @@ class CommandPalette(QDialog):
         self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(lambda _t: self._refilter())
         self.search.installEventFilter(self)
-        lay.addWidget(self.search)
+        self.add_content(self.search)
 
         self.list = QListWidget()
         self.list.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
@@ -115,10 +89,8 @@ class CommandPalette(QDialog):
         self.list.itemActivated.connect(lambda _it: self._run_current())
         self.list.clicked.connect(lambda _ix: self._run_current())
         self.list.setStyleSheet(self._list_qss())
-        lay.addWidget(self.list, stretch=1)
-
-        root.addWidget(card)
-        self.resize(560, 420)
+        self.list.setMinimumHeight(260)
+        self.add_content(self.list)
 
         self._refilter()
         self.search.setFocus()

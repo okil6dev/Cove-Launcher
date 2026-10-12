@@ -16,25 +16,22 @@ from __future__ import annotations
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
-    QDialog,
     QFrame,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QTableWidget,
     QTableWidgetItem,
-    QVBoxLayout,
 )
 from qfluentwidgets import (
     BodyLabel,
     CaptionLabel,
     FluentIcon,
     ProgressBar,
-    PrimaryPushButton,
     PushButton,
-    TitleLabel,
 )
 
+from .cove_dialog import CoveFormDialog
 from .java_detector import JavaInstall, detect_java_installations
 
 
@@ -52,6 +49,29 @@ class _DetectThread(QThread):
 
 
 # ── source badge colours ───────────────────────────────────────────────────────
+
+def _fg() -> str:
+    try:
+        from .theme import fg
+        return fg()
+    except Exception:
+        return "#1a2129"
+
+
+def _hairline() -> str:
+    try:
+        from .theme import hairline
+        return hairline()
+    except Exception:
+        return "rgba(0,0,0,0.12)"
+
+
+def _tile_bg() -> str:
+    try:
+        from .theme import icon_tile_bg
+        return icon_tile_bg()
+    except Exception:
+        return "rgba(0,0,0,0.05)"
 
 _SOURCE_STYLE = {
     "launcher": ("Launcher", "#89DCFF", "rgba(137,220,255,0.15)"),
@@ -77,17 +97,15 @@ def _badge(source: str) -> QLabel:
 
 # ── dialog ────────────────────────────────────────────────────────────────────
 
-class JavaDetectDialog(QDialog):
+class JavaDetectDialog(CoveFormDialog):
     """
     Detects all Java installations on this machine and lets the user
     pick one.  On acceptance, ``selected_path`` holds the chosen exe.
     """
 
     def __init__(self, parent=None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("Detect Java Installations")
-        self.setMinimumSize(680, 460)
-        self.setModal(True)
+        super().__init__("Detect Java Installations", parent, width=680,
+                         ok_text="Select", cancel_text="Cancel")
         self.selected_path: str | None = None
         self._results: list[JavaInstall] = []
         self._worker: _DetectThread | None = None
@@ -97,12 +115,7 @@ class JavaDetectDialog(QDialog):
     # ── UI construction ───────────────────────────────────────────────────────
 
     def _build_ui(self) -> None:
-        root = QVBoxLayout(self)
-        root.setContentsMargins(24, 20, 24, 20)
-        root.setSpacing(14)
-
-        # Title
-        root.addWidget(TitleLabel("Detect Java Installations"))
+        root = self.viewLayout
         sub = CaptionLabel(
             "Cove scans your system for Java runtimes — registry, common install paths, "
             "PATH, and its own managed JDKs."
@@ -112,7 +125,7 @@ class JavaDetectDialog(QDialog):
 
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.HLine)
-        sep.setStyleSheet("color: rgba(255,255,255,0.10);")
+        sep.setStyleSheet(f"color: {_hairline()};")
         root.addWidget(sep)
 
         # Status / progress
@@ -136,12 +149,15 @@ class JavaDetectDialog(QDialog):
         self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._table.setAlternatingRowColors(True)
         self._table.setStyleSheet(
-            "QTableWidget { border: 1px solid rgba(255,255,255,0.10); border-radius: 8px; }"
+            f"QTableWidget {{ border: 1px solid {_hairline()}; border-radius: 8px; }}"
             "QTableWidget::item { padding: 6px 10px; }"
-            "QTableWidget::item:selected { background: rgba(137,220,255,0.18); color: white; }"
-            "QHeaderView::section { background: rgba(255,255,255,0.06); "
-            "  border: none; border-bottom: 1px solid rgba(255,255,255,0.10);"
-            "  padding: 6px 10px; font-weight: bold; }"
+            "QTableWidget::item:selected { background: rgba(137,220,"
+            f"255,0.18); color: {_fg()}; }}"
+            f"QHeaderView::section {{ background: {_tile_bg()};"
+            f"  border: none; border-bottom: 1px solid {_hairline()};"
+            f"  padding: 6px 10px; font-weight: bold; color: {_fg()}; }}"
+            "QTableWidget QTableCornerButton::section"
+            " { background: transparent; border: none; }"
         )
         self._table.setVisible(False)
         self._table.doubleClicked.connect(self._on_accept)
@@ -156,34 +172,20 @@ class JavaDetectDialog(QDialog):
         self._empty_lbl.setVisible(False)
         root.addWidget(self._empty_lbl)
 
-        # Buttons
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(8)
-
+        # Re-scan lives above the Cove Select/Cancel row.
         self._rescan_btn = PushButton(FluentIcon.SYNC, "Re-scan")
         self._rescan_btn.clicked.connect(self._start_detect)
-        btn_row.addWidget(self._rescan_btn)
-        btn_row.addStretch()
-
-        self._cancel_btn = PushButton(FluentIcon.CLOSE, "Cancel")
-        self._cancel_btn.clicked.connect(self.reject)
-        btn_row.addWidget(self._cancel_btn)
-
-        self._select_btn = PrimaryPushButton(FluentIcon.ACCEPT_MEDIUM
-                                             if hasattr(FluentIcon, "ACCEPT_MEDIUM")
-                                             else FluentIcon.COMPLETED, "Select")
-        self._select_btn.setEnabled(False)
-        self._select_btn.clicked.connect(self._on_accept)
-        btn_row.addWidget(self._select_btn)
-
-        root.addLayout(btn_row)
+        root.addWidget(self._rescan_btn)
 
         self._table.selectionModel().selectionChanged.connect(
-            lambda *_: self._select_btn.setEnabled(
+            lambda *_: self.yesButton.setEnabled(
                 bool(self._table.selectedRows() if hasattr(self._table, "selectedRows")
                      else self._table.currentRow() >= 0)
             )
         )
+        self.yesButton.setEnabled(False)
+        self.yesButton.clicked.disconnect()
+        self.yesButton.clicked.connect(self._on_accept)
 
     # ── scan orchestration ────────────────────────────────────────────────────
 
@@ -194,7 +196,7 @@ class JavaDetectDialog(QDialog):
         self._empty_lbl.setVisible(False)
         self._table.setRowCount(0)
         self._results = []
-        self._select_btn.setEnabled(False)
+        self.yesButton.setEnabled(False)
         self._rescan_btn.setEnabled(False)
         self._status_lbl.setText("Scanning for Java installations…")
         self._progress.setValue(0)
@@ -230,6 +232,12 @@ class JavaDetectDialog(QDialog):
         self._populate_table(results)
 
     def _populate_table(self, results: list[JavaInstall]) -> None:
+        from PyQt6.QtGui import QBrush, QColor
+
+        try:
+            cell_fg = QColor(_fg())
+        except Exception:
+            cell_fg = None
         self._table.setRowCount(0)
         for install in results:
             row = self._table.rowCount()
@@ -240,10 +248,15 @@ class JavaDetectDialog(QDialog):
             font = QFont()
             font.setBold(True)
             ver_item.setFont(font)
+            if cell_fg is not None:
+                ver_item.setForeground(QBrush(cell_fg))
             self._table.setItem(row, 0, ver_item)
 
             # Vendor
-            self._table.setItem(row, 1, QTableWidgetItem(install.vendor))
+            vendor_item = QTableWidgetItem(install.vendor)
+            if cell_fg is not None:
+                vendor_item.setForeground(QBrush(cell_fg))
+            self._table.setItem(row, 1, vendor_item)
 
             # Source badge (as widget in cell)
             badge = _badge(install.source)
@@ -257,6 +270,8 @@ class JavaDetectDialog(QDialog):
             # Path
             path_item = QTableWidgetItem(install.path)
             path_item.setToolTip(install.path)
+            if cell_fg is not None:
+                path_item.setForeground(QBrush(cell_fg))
             self._table.setItem(row, 3, path_item)
 
             # Store the install path as user data on the version cell

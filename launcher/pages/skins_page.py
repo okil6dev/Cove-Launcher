@@ -42,7 +42,6 @@ from qfluentwidgets import (
     FluentIcon,
     HorizontalSeparator,
     LineEdit,
-    MessageBoxBase,
     PrimaryPushButton,
     PushButton,
     SubtitleLabel,
@@ -57,23 +56,6 @@ from ..constants import (
 from ..page_scroll import scrollable_page_root
 from ..workers_net import SOURCE_MODRINTH, ModInstallThread
 from .. import mojang_services as ms
-
-
-class _RenameDialog(MessageBoxBase):
-    """Modal to rename a saved skin in the library."""
-
-    def __init__(self, parent, current: str) -> None:
-        super().__init__(parent)
-        self.viewLayout.addWidget(SubtitleLabel("Rename skin"))
-        self.name_edit = LineEdit()
-        self.name_edit.setText(current)
-        self.name_edit.selectAll()
-        self.viewLayout.addWidget(self.name_edit)
-        self.yesButton.setText("Rename")
-        self.cancelButton.setText("Cancel")
-
-    def validate(self) -> bool:  # noqa: N802 - qfw API
-        return bool(self.name_edit.text().strip())
 
 
 # ---------------------------------------------------------------------------
@@ -558,14 +540,14 @@ class SkinsPage(QWidget):
     @staticmethod
     def _style_list(list_widget: QListWidget) -> None:
         """Opaque-free QListWidget with theme-aware selection/hover colours."""
-        from ..theme import item_hover_bg, item_sel_bg
+        from ..theme import fg, item_hover_bg, item_sel_bg
 
         list_widget.setStyleSheet(
-            "QListWidget { background: transparent; outline: none;"
-            " border: none; }"
-            "QListWidget::item { border-radius: 8px; margin: 2px 0; }"
-            f"QListWidget::item:selected {{ background: {item_sel_bg()}; }}"
-            f"QListWidget::item:hover:!selected {{ background: {item_hover_bg()}; }}"
+            f"QListWidget {{ background: transparent; outline: none;"
+            f" border: none; color: {fg()}; }}"
+            f"QListWidget::item {{ border-radius: 8px; margin: 2px 0; color: {fg()}; }}"
+            f"QListWidget::item:selected {{ background: {item_sel_bg()}; color: {fg()}; }}"
+            f"QListWidget::item:hover:!selected {{ background: {item_hover_bg()}; color: {fg()}; }}"
         )
 
     def _apply_theme(self) -> None:
@@ -593,6 +575,13 @@ class SkinsPage(QWidget):
         )
         self._lib_card.setStyleSheet(card_qss("skinsLibraryCard"))
         self._apply_card.setStyleSheet(card_qss("skinsApplyCard"))
+        # Lists are styled once at build; re-style here so a live
+        # light<->dark switch recolors their item text too.
+        try:
+            self._style_list(self.skin_list)
+            self._style_list(self.detected_cape_list)
+        except Exception:
+            pass
 # ---------------------------------------------------------- refresh --
     def refresh_all(self) -> None:
         self._refresh_library()
@@ -831,6 +820,8 @@ class SkinsPage(QWidget):
     def _on_rename_skin(self) -> None:
         from PyQt6.QtCore import QTimer
 
+        from ..cove_dialog import CoveInput
+
         def _perform() -> None:
             entry_id = self._selected_skin_id()
             if not entry_id:
@@ -839,18 +830,20 @@ class SkinsPage(QWidget):
                 (e for e in self._lib.skins() if e.id == entry_id), None)
             if entry is None:
                 return
-            # Hide the list so the modal's Fluent fade effect can't grab a
-            # pixmap of it mid-repaint (same pattern as the accounts page).
-            self.skin_list.setVisible(False)
-            try:
-                dialog = _RenameDialog(self.window(), entry.name)
-                if dialog.exec():
-                    new_name = dialog.name_edit.text().strip()
-                    self._lib.rename_skin(entry_id, new_name)
-                    self._log(f"Skin renamed to '{new_name}'.")
-                    self._refresh_library()
-            finally:
-                self.skin_list.setVisible(True)
+            # Native Cove input dialog: plain QDialog, no Fluent fade effect.
+            new_name = CoveInput.ask(
+                self.window(),
+                "Rename skin",
+                "New name",
+                initial=entry.name,
+                ok="Rename",
+                validate=lambda v: "" if v.strip() else "Name cannot be empty.",
+            )
+            if not new_name:
+                return
+            self._lib.rename_skin(entry_id, new_name)
+            self._log(f"Skin renamed to '{new_name}'.")
+            self._refresh_library()
 
         QTimer.singleShot(0, _perform)
 
@@ -873,11 +866,29 @@ class SkinsPage(QWidget):
         self._toast("success", "Exported", f"Saved to {path}", 5000)
 
     def _on_delete_skin(self) -> None:
+        from PyQt6.QtCore import QTimer
+
+        from ..cove_dialog import CoveConfirm
+
         entry_id = self._selected_skin_id()
         if not entry_id:
             return
-        self._lib.remove_skin(entry_id)
-        self._refresh_library()
+        entry = next(
+            (e for e in self._lib.skins() if e.id == entry_id), None)
+
+        def _perform() -> None:
+            if not CoveConfirm.ask(
+                self.window(),
+                "Delete skin",
+                f"Delete '{entry.name if entry else entry_id}' "
+                "from your library?\nThis cannot be undone.",
+                ok="Delete",
+            ):
+                return
+            self._lib.remove_skin(entry_id)
+            self._refresh_library()
+
+        QTimer.singleShot(0, _perform)
 
     # ----------------------------------------------------------- apply --
     def _run_apply(self, fn, refresh_ms: bool = False) -> None:
