@@ -197,30 +197,43 @@ def is_graalvm_java(java_path: str) -> bool:
     return bool(java_path) and os.path.isfile(java_path) and _is_graalvm_binary(java_path)
 
 
-def graalvm_jvm_flags() -> list[str]:
+def graalvm_jvm_flags(gc: str = "g1") -> list[str]:
     """
     Return a list of extra JVM flags that improve performance when running on
     GraalVM Community Edition.
 
     These flags are safe no-ops on standard HotSpot and ignored by GraalVM
-    when not applicable, so they can be passed unconditionally.
+    when not applicable, so they can be passed unconditionally -- except the
+    G1 tuning block, which is only added when G1 is the collector that will
+    actually run. *gc* names that collector in lower case (``"g1"``, ``"z"``,
+    ``"shenandoah"``...).
+
+    Handing HotSpot two collectors at once is not a harmless duplicate: it
+    refuses to start with "Multiple garbage collectors selected", which is
+    what a user who typed ``-XX:+UseZGC`` on a GraalVM instance used to get.
     """
-    return [
+    flags = [
         # Enable the Graal JIT compiler explicitly (default on GraalVM but
         # harmless on HotSpot where it is simply unrecognised and ignored).
         "-XX:+UnlockExperimentalVMOptions",
         "-XX:+UseJVMCICompiler",
         # Larger code cache helps long-running sessions like Minecraft.
         "-XX:ReservedCodeCacheSize=512m",
+    ]
+    if gc == "g1":
         # G1GC is a good default; Graal works well with it.
-        "-XX:+UseG1GC",
-        "-XX:MaxGCPauseMillis=50",
-        "-XX:G1HeapRegionSize=16m",
-        "-XX:G1NewSizePercent=20",
-        "-XX:G1ReservePercent=20",
-        "-XX:G1MixedGCCountTarget=4",
+        flags += [
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=50",
+            "-XX:G1HeapRegionSize=16m",
+            "-XX:G1NewSizePercent=20",
+            "-XX:G1ReservePercent=20",
+            "-XX:G1MixedGCCountTarget=4",
+        ]
+    flags += [
         # Reduce JIT compilation overhead on background threads.
         "-XX:+ParallelRefProcEnabled",
         # Faster class loading.
         "-XX:+TieredCompilation",
     ]
+    return flags

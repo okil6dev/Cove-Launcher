@@ -178,6 +178,10 @@ class InstancesPage(QWidget):
         self.setObjectName("instancesPage")
         self._instances: list[Instance] = []
         self._cube_icon = _make_cube_icon()
+        # True only while a launcher-side task (install/import/verify) owns the
+        # files. A game that is merely *running* must never set this: playing
+        # does not stop you from managing instances.
+        self._busy = False
 
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 20, 24, 16)
@@ -320,6 +324,9 @@ class InstancesPage(QWidget):
         self.delete_button.clicked.connect(
             lambda: self.deleteRequested.emit(self.current_name() or "")
         )
+        # Nothing is selected yet, so start from the same state refresh()
+        # would reach rather than whatever the widgets default to.
+        self._sync_actions()
 
     # -- helpers -----------------------------------------------------------------
     def _update_banner(self) -> None:
@@ -433,10 +440,10 @@ class InstancesPage(QWidget):
             self.list_widget.setCurrentRow(row)
         self.count_label.setText(str(len(self._instances)))
         self._set_empty_state(not self._instances)
-        # Refresh the Edit/Folder/Delete enablement from the real selection.
+        # Refresh the button enablement from the real selection.
         # _on_selection only fires on a *change*, so a refresh that lands on the
         # same row would otherwise leave the buttons stale.
-        self._sync_edit_enabled()
+        self._sync_actions()
         self._update_playtime_label()
         self._update_banner()
 
@@ -445,27 +452,39 @@ class InstancesPage(QWidget):
         self.list_widget.setVisible(not empty)
 
     def set_busy(self, busy: bool, status_text: str | None = None) -> None:
-        self.play_button.setEnabled(not busy and bool(self._instances))
-        self.progress_bar.setVisible(busy)
-        for widget in (
-            self.new_button,
-            self.import_button,
-            self.delete_button,
-            self.folder_button,
-            self.list_widget,
-        ):
-            widget.setEnabled(not busy)
-        if not busy:
-            self._sync_edit_enabled()
+        """Lock the page while the launcher itself is working.
+
+        ``busy`` means an install / import / launch-preparation worker owns
+        the instance files, so nothing here is actionable until it finishes.
+        A running game is deliberately *not* busy: the list and every button
+        stay live while you play (the window reports its own refusals when an
+        action still cannot run yet).
+        """
+        self._busy = bool(busy)
+        self.progress_bar.setVisible(self._busy)
+        self._sync_actions()
         if status_text is not None:
             self.status_label.setText(status_text)
 
-    def _sync_edit_enabled(self) -> None:
-        """Edit button is active only when an instance is selected."""
-        self.edit_button.setEnabled(bool(self.current_instance()))
+    def _sync_actions(self) -> None:
+        """Single source of truth for which controls can be clicked.
+
+        Two independent reasons to grey something out: the launcher is
+        installing (locks the whole page, Edit included), and nothing is
+        selected (locks the instance actions). New/Import stay usable either
+        way so the very first instance can still be created -- greying those
+        would leave no way in when the list is empty.
+        """
+        locked = self._busy
+        selected = self.current_instance() is not None
+        for widget in (self.new_button, self.import_button, self.list_widget):
+            widget.setEnabled(not locked)
+        for widget in (self.play_button, self.edit_button,
+                       self.folder_button, self.delete_button):
+            widget.setEnabled(not locked and selected)
 
     def _on_selection(self) -> None:
-        self.edit_button.setEnabled(bool(self.current_instance()))
+        self._sync_actions()
         self._update_playtime_label()
         self._update_banner()
         self.selectionChanged.emit(self.current_instance())

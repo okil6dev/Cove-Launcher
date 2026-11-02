@@ -73,6 +73,15 @@ SERVER_INDEX_PATH: str = os.path.join(APP_DATA_DIR, "servers.json")
 VAULT_PATH: str = os.path.join(APP_DATA_DIR, "vault.dat")
 SHARED_ASSETS_DIR: str = os.path.join(APP_DATA_DIR, "shared-assets")
 
+# --- Console log -----------------------------------------------------------
+# Everything the Console tab prints (launcher messages *and* the running
+# game's stdout/stderr) is mirrored to this file, so the log can still be
+# opened or copied after the on-screen view was cleared by a new launch.
+# Once it exceeds the cap it is rotated to ``console.log.old``.
+LOGS_DIR: str = os.path.join(APP_DATA_DIR, "logs")
+CONSOLE_LOG_PATH: str = os.path.join(LOGS_DIR, "console.log")
+CONSOLE_LOG_MAX_BYTES: int = 8 * 1024 * 1024
+
 # --- Skin editor -----------------------------------------------------------
 # Local skin/cape library managed by the Skins tab. Every uploaded skin/cape
 # is copied into these folders so the library survives restarts; an index

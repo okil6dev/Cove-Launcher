@@ -71,6 +71,7 @@ from .instances import (
     validate_java_executable,
     validate_name,
 )
+from . import jvm_args
 from .system_info import get_total_ram_gb
 from .workers import LoaderVersionsThread
 from .pages.instances_page import _make_cube_icon
@@ -118,6 +119,23 @@ QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0px; 
 """
 
 _ROOT_QSS = _root_qss()
+
+
+def _zgc_hint(inst: Instance, major: int | None = None) -> str:
+    """What the ZGC switch will add, for the Java that will run the game.
+
+    Read from the Java that will run the game rather than the switch's
+    promise, so an instance on Java 8 is told the switch does nothing instead
+    of silently gaining flags its JDK would refuse to start with.
+    """
+    if major is None:
+        major = jvm_args.launch_java_major(inst)
+    flags = jvm_args.zgc_flags(major)
+    if not flags:
+        return ("ZGC needs Java 11 or newer. This instance runs an older "
+                "Java, so the switch adds nothing.")
+    where = f"Java {major}" if major else "the selected Java"
+    return f"Adds {' '.join(flags)} to every launch ({where})."
 
 
 class _InstanceStatsThread(QThread):
@@ -382,9 +400,21 @@ class InstanceEditorWindow(MSFluentWindow):
         self.java_result_label = CaptionLabel("")
         self.jvm_args_edit = LineEdit()
         self.jvm_args_edit.setPlaceholderText(
-            "e.g. -Xmx4G -XX:+UseG1GC -Djava.awt.headless=true"
+            r"e.g. -XX:+UseG1GC -Djava.library.path=C:\mods\lib"
         )
-        self.jvm_args_edit.setText(" ".join(inst.extra_jvm_args or []))
+        self.jvm_args_edit.setText(jvm_args.join(inst.extra_jvm_args or []))
+        # ZGC is a switch rather than something to type, because the flags that
+        # turn it on depend on the JDK (see launcher.jvm_args.zgc_flags).
+        self.zgc_check = CheckBox("Enable ZGC (low-pause garbage collector)")
+        self.zgc_check.setChecked(bool(getattr(inst, "zgc_enabled", False)))
+        self.zgc_check.setToolTip(
+            "Uses the Z Garbage Collector instead of G1. Best with a large "
+            "heap (8 GB+); it trades a little throughput for far shorter "
+            "pause times, which mostly shows up as fewer stutters."
+        )
+        self.zgc_hint = CaptionLabel(_zgc_hint(inst))
+        self.zgc_hint.setWordWrap(True)
+        self.java_path_edit.textChanged.connect(self._refresh_zgc_hint)
         # Identity widgets (Instance page)
         self.name_edit = LineEdit()
         self.name_edit.setText(inst.name)
@@ -661,6 +691,8 @@ class InstanceEditorWindow(MSFluentWindow):
         jvm_col.setSpacing(4)
         jvm_col.addWidget(BodyLabel("Custom JVM arguments"))
         jvm_col.addWidget(self.jvm_args_edit)
+        jvm_col.addWidget(self.zgc_check)
+        jvm_col.addWidget(self.zgc_hint)
         perf_row.addLayout(jvm_col, stretch=1)
         lay.addLayout(perf_row)
 
@@ -1382,9 +1414,17 @@ class InstanceEditorWindow(MSFluentWindow):
                         f"Saved {latest}; applies on next Play.")
 
     def gather_jvm_args(self) -> list[str]:
-        raw = self.jvm_args_edit.text().strip()
-        import shlex
-        return shlex.split(raw) if raw else []
+        return jvm_args.split(self.jvm_args_edit.text())
+
+    def _refresh_zgc_hint(self) -> None:
+        """Say which flags the switch adds for the Java path now in the box."""
+        try:
+            major = jvm_args.java_major(self.java_path_edit.text().strip())
+            if major is None:
+                major = jvm_args.launch_java_major(self._instance)
+            self.zgc_hint.setText(_zgc_hint(self._instance, major))
+        except Exception:  # noqa: BLE001 - the hint must never break the editor
+            self.zgc_hint.setText(_zgc_hint(self._instance))
 
     def _toast(self, severity: str, title: str, content: str = "",
                duration: int = 4000) -> None:
@@ -1803,6 +1843,7 @@ class InstanceEditorWindow(MSFluentWindow):
         inst.ram_gb = int(self.ram_combo.currentData() or inst.ram_gb)
         inst.java_path = self.java_path_edit.text().strip() or None
         inst.extra_jvm_args = self.gather_jvm_args()
+        inst.zgc_enabled = self.zgc_check.isChecked()
         inst.icon_path = self._pending_icon_path or None
         inst.banner_path = self._pending_banner_path or None
         inst.custom_bg_png = self._pending_bg_png or None

@@ -56,6 +56,7 @@ from .constants import (
     DEFAULT_RAM_GB,
     MIN_RAM_GB,
 )
+from . import jvm_args
 from .instances import validate_java_executable
 from .servers import (
     Server,
@@ -280,11 +281,12 @@ class ServerEditorWindow(MSFluentWindow):
         self.java_result_label.setWordWrap(True)
         lay.addWidget(self.java_result_label)
 
-        # JVM args row: split with shlex on save, same as instances.
+        # JVM args row: split on save with the same lossless splitter the
+        # instance editor uses (shlex ate the backslashes out of Windows paths).
         jvm_row = QHBoxLayout()
         jvm_row.addWidget(BodyLabel("JVM args"))
         self.jvm_args_edit = LineEdit()
-        self.jvm_args_edit.setText(" ".join(self._server.extra_jvm_args or []))
+        self.jvm_args_edit.setText(jvm_args.join(self._server.extra_jvm_args or []))
         self.jvm_args_edit.setPlaceholderText("e.g. -XX:+UseG1GC")
         self.jvm_args_edit.setClearButtonEnabled(True)
         jvm_row.addWidget(self.jvm_args_edit, 1)
@@ -343,9 +345,7 @@ class ServerEditorWindow(MSFluentWindow):
                     "Java test", "Java is valid." if ok else detail)
 
     def gather_jvm_args(self) -> list[str]:
-        raw = self.jvm_args_edit.text().strip()
-        import shlex
-        return shlex.split(raw) if raw else []
+        return jvm_args.split(self.jvm_args_edit.text())
 
     def _on_rename(self) -> None:
         if self._running:

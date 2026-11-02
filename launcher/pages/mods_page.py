@@ -1315,6 +1315,7 @@ class ModsPage(QWidget):
                 self._run_next_install()
                 return
             self.set_busy(False)
+            self._finish_install_batch()
             return
         target_dir, game_version, loader = target
         done = self._install_total - len(self._install_queue) - 1
@@ -1354,12 +1355,7 @@ class ModsPage(QWidget):
         self.set_busy(False)
         self.status_label.setText(f"Installed: {names}")
         self._toast("success", "Mods installed", names[:200], 5000)
-        # Batch finished: drop every tick so a second confirm can't
-        # re-install the same mods accidentally.
-        self._checked_mods.clear()
-        self._checked_titles.clear()
-        self.refresh_installed()
-        self._populate_list()   # refresh [installed] tags
+        self._finish_install_batch()
 
     def _on_install_failed(self, message: str) -> None:
         self._log(message, "ERROR")
@@ -1369,16 +1365,37 @@ class ModsPage(QWidget):
             return
         self.set_busy(False)
         self.status_label.setText("Installation failed.")
-        self.refresh_installed()
+        # The batch is over even though the last download failed -- clear the
+        # ticks too, or the list looks like nothing happened and a second
+        # confirm silently retries the same selection.
+        self._finish_install_batch()
 
-    # -- cancel / help ------------------------------------------------------------------------------
-    def _on_cancel(self) -> None:
+    # -- selection clearing ------------------------------------------------------------------------
+    def _clear_selection(self) -> None:
+        """Forget every tick and uncheck the visible cards in one place."""
         self._install_queue.clear()
         self._checked_mods.clear()
         self._checked_titles.clear()
         for card in self._cards.values():
-            if not sip.isdeleted(card):
+            if sip.isdeleted(card):
+                continue
+            if card.checkbox.isChecked():
                 card.checkbox.setChecked(False)
+
+    def _finish_install_batch(self) -> None:
+        """Wrap up a download batch: drop the ticks and re-render the list.
+
+        Called from every terminal path (success, failure, missing target)
+        so a finished batch never leaves the selection ticked. Rebuilding the
+        list is what actually clears the checkboxes visually.
+        """
+        self._clear_selection()
+        self.refresh_installed()
+        self._populate_list()   # drop the ticks + refresh [installed] tags
+
+    # -- cancel / help ------------------------------------------------------------------------------
+    def _on_cancel(self) -> None:
+        self._clear_selection()
         self.status_label.setText("Selection cleared.")
         self._toast("info", "Cancelled", "Selection cleared.", 3000)
 

@@ -25,6 +25,7 @@ from qfluentwidgets import (
 from .accounts import AccountStore
 from .constants import APP_NAME, APP_VERSION, ICON_FILE, MIN_SUPPORTED_RELEASE, JAVA_MODE_GRAALVM
 from .instances import InstanceRegistry, build_jvm_arguments, resolve_java
+from .jvm_args import launch_java_major
 from .servers import ServerRegistry
 from .security import Vault, VaultError
 from .system_info import get_total_ram_gb
@@ -563,6 +564,10 @@ class LauncherWindow(MSFluentWindow):
             vault=self._vault,
             log=lambda msg, level="INFO": self.log(msg, level),
             toast=self._toast,
+            # Settings -> Minecraft pushes its switches into these instances.
+            # A lambda, not ``self.registry.list``: the bound method would keep
+            # pointing at whatever registry object existed at construction.
+            get_instances=lambda: self.registry.list(),
             parent=self,
         ) if self._vault is not None else None
 
@@ -960,14 +965,26 @@ class LauncherWindow(MSFluentWindow):
             splash.resize_to_parent()
 
     # ------------------------------------------------------- instance actions --
+    def _install_running(self) -> bool:
+        """True while an install/import/verify worker owns the instance files."""
+        return self._installer is not None and self._installer.isRunning()
+
+    def _game_running(self) -> bool:
+        """True while a launched game process is up."""
+        return self._launcher is not None and self._launcher.isRunning()
+
     def _is_busy(self) -> bool:
-        installer_running = (
-            self._installer is not None and self._installer.isRunning()
-        )
-        launcher_running = (
-            self._launcher is not None and self._launcher.isRunning()
-        )
-        return bool(installer_running or launcher_running)
+        return self._install_running() or self._game_running()
+
+    def _running_instance_name(self) -> str | None:
+        """Name of the instance that is playing right now, or None.
+
+        ``_launching_instance`` is whoever the last Play belonged to, so it
+        only counts while that launch's process is actually up.
+        """
+        if not self._game_running():
+            return None
+        return getattr(getattr(self, "_launching_instance", None), "name", None)
 
     def _busy_reason(self) -> str:
         """Describe what is currently blocking other actions, or ''.
@@ -975,9 +992,9 @@ class LauncherWindow(MSFluentWindow):
         These actions used to ``return`` silently when busy, which looked
         exactly like a dead button. Every guard now reports this instead.
         """
-        if self._installer is not None and self._installer.isRunning():
+        if self._install_running():
             return "an install/download is still running"
-        if self._launcher is not None and self._launcher.isRunning():
+        if self._game_running():
             return "the game is still running"
         return ""
 
@@ -1091,7 +1108,13 @@ class LauncherWindow(MSFluentWindow):
 
     def _on_edit_instance(self, name: str) -> None:
         """Open the standalone instance editor window for *name*."""
-        if not name or self._is_busy():
+        if not name:
+            return
+        if self._install_running():
+            # The editor writes registry + instance files, so it would race an
+            # install that is writing the same folders. A running game is
+            # fine: edits only affect the *next* launch.
+            self._warn_busy("edit an instance")
             return
         instance = self.registry.get(name)
         if instance is None:
@@ -1105,7 +1128,21 @@ class LauncherWindow(MSFluentWindow):
     def _on_delete_instance(self, name: str) -> None:
         from PyQt6.QtCore import QTimer
 
-        if not name or self._is_busy():
+        if not name:
+            return
+        if self._install_running():
+            self._warn_busy("delete an instance")
+            return
+        if self._running_instance_name() == name:
+            # Windows keeps the running game's files locked, so rmtree would
+            # leave a half-removed folder behind. Say so instead of doing
+            # nothing at all.
+            message = (
+                f"'{name}' is running right now. Close Minecraft before "
+                "deleting it, or its files would be left half-removed."
+            )
+            self.log(message, "WARN")
+            self._toast("warning", "Instance is running", message, 8000)
             return
 
         def _perform() -> None:
@@ -1274,6 +1311,10 @@ class LauncherWindow(MSFluentWindow):
         self.instances_page.progress_bar.setRange(0, 100)
         self.instances_page.progress_bar.setValue(0)
         self._launching_instance = instance
+        # Fresh console per launch: the previous instance's output must never
+        # be mistaken for this one's. Only the view is cleared -- the mirrored
+        # log file keeps the earlier lines (Console -> "Open log file").
+        self.console_page.begin_session(f"Launching '{instance.name}'")
         self.log(f"Installing/verifying {target} for instance '{instance.name}'...")
 
         if instance.launch_version_id:
@@ -1342,7 +1383,14 @@ class LauncherWindow(MSFluentWindow):
         # build_jvm_arguments injects GraalVM-tuned flags automatically when
         # the instance is set to GraalVM mode.
         ram_mb = max(512, int(instance.ram_gb) * 1024)
-        jvm_args = build_jvm_arguments(instance, ram_mb)
+        # ZGC's flags depend on the JDK that will actually run the game, which
+        # only the launch path knows: the forced JVM if there is one, else the
+        # runtime the version json declares.
+        jvm_args = build_jvm_arguments(
+            instance,
+            ram_mb,
+            java_major=launch_java_major(instance, override_java),
+        )
         # Strip the leading -Xmx/-Xms since LaunchThread re-adds them from ram_gb;
         # only pass the extra flags that follow.
         extra_args = jvm_args[2:]  # skip -Xmx and -Xms
@@ -1355,6 +1403,21 @@ class LauncherWindow(MSFluentWindow):
             ensure_applied(instance)
         except Exception as exc:  # noqa: BLE001 - styling must not block play
             self.log(f"Custom title background skipped: {exc}", "ERROR")
+
+        # Settings -> Minecraft: re-apply the global game options on every
+        # launch, so a new instance or a reset options.txt still obeys them.
+        # Only the options the user switched on are written.
+        try:
+            from .minecraft_options import enforce, load
+
+            applied = enforce(instance, load(self._vault))
+            if applied:
+                self.log(
+                    "Global Minecraft options applied: "
+                    + ", ".join(applied).lower()
+                )
+        except Exception as exc:  # noqa: BLE001 - must never block play
+            self.log(f"Global Minecraft options skipped: {exc}", "ERROR")
 
         self.log(
             f"Launching {version_id} in '{instance.name}' as "
@@ -1399,7 +1462,10 @@ class LauncherWindow(MSFluentWindow):
         preview = " ".join(command_line[:4])
         suffix = " ..." if len(command_line) > 4 else ""
         self.log(f"Process started: {preview}{suffix}")
-        self.instances_page.status_label.setText("Game running.")
+        # Launch preparation is over, so unlock the page (which also hides the
+        # finished progress bar). A running game is not "busy": only a
+        # launcher-side install/import greys the Instances page out.
+        self._set_busy(False, "Game running.")
         self._recent_game_output.clear()
         # Playtime tracking: tick a live session counter every second.
         self._play_started = time.monotonic()
@@ -1411,6 +1477,10 @@ class LauncherWindow(MSFluentWindow):
 
     def _tick_playtime(self) -> None:
         if self._play_started is not None:
+            # A live game *is* activity. Without this heartbeat the stall
+            # watchdog would "recover" from a quiet five minutes of gameplay
+            # by dropping self._launcher -- unlocking Play while it runs.
+            self._touch_worker()
             self.instances_page.set_session(int(time.monotonic() - self._play_started))
 
     def _stop_playtime(self) -> int | None:

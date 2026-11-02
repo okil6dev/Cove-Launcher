@@ -30,6 +30,7 @@ from .constants import (
     JAVA_MODE_GRAALVM,
     SHARED_ASSETS_DIR,
 )
+from .jvm_args import requested_collector, zgc_flags
 
 _NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.-]{0,63}$")
 
@@ -56,6 +57,10 @@ class Instance:
     custom_bg_mode: str = "static"       # static | panorama
     # Extra JVM args (e.g. ["-Dfoo=bar"]) appended after Xmx/Xms.
     extra_jvm_args: list[str] = field(default_factory=list)
+    # Ask for the Z Garbage Collector on this instance's launches. The exact
+    # flags are not stored: they depend on the JDK that will run the game
+    # (see launcher.jvm_args.zgc_flags) and are rebuilt for every launch.
+    zgc_enabled: bool = False
     created: str = field(default_factory=lambda: datetime.now().isoformat())
     last_played: str | None = None
     # Accumulated seconds actually spent in-game (updated when a game exits).
@@ -303,7 +308,11 @@ def validate_java_executable(path: str) -> tuple[bool, str]:
         return False, f"Failed to execute: {exc}"
 
 
-def build_jvm_arguments(instance: "Instance", ram_mb: int) -> list[str]:
+def build_jvm_arguments(
+    instance: "Instance",
+    ram_mb: int,
+    java_major: int | None = None,
+) -> list[str]:
     """
     Assemble the JVM memory + custom arguments for a launch.
 
@@ -311,7 +320,12 @@ def build_jvm_arguments(instance: "Instance", ram_mb: int) -> list[str]:
     arguments from the instance editor are appended after the memory flags.
 
     When GraalVM mode is selected, GraalVM-optimised JVM flags are prepended
-    (G1GC tuning, JVMCI compiler unlock, larger code cache) for better FPS.
+    (JVMCI compiler unlock, larger code cache, and G1 tuning unless another
+    collector was asked for) for better FPS.
+
+    ``java_major`` is the feature version of the JDK that will actually run
+    the game (``None`` when unknown); it picks the right ZGC flags when the
+    instance has ZGC switched on, and is ignored otherwise.
     """
     args = [
         f"-Xmx{ram_mb}M",
@@ -333,11 +347,24 @@ def build_jvm_arguments(instance: "Instance", ram_mb: int) -> list[str]:
         from .graalvm import detect_graalvm
 
         is_graal = detect_graalvm() is not None
+    extra = list(instance.extra_jvm_args or [])
+    # Which collector this launch will end up with: the switch if it is on,
+    # else whatever the user's own arguments select. It decides whether the
+    # GraalVM preset may add its G1 tuning -- two collectors named at once is
+    # a hard startup failure, not a harmless duplicate.
+    collector = ("z" if getattr(instance, "zgc_enabled", False)
+                 else requested_collector(extra))
     if is_graal:
         from .graalvm import graalvm_jvm_flags
 
-        args += graalvm_jvm_flags()
-    args += list(instance.extra_jvm_args or [])
+        args += graalvm_jvm_flags(collector or "g1")
+    if getattr(instance, "zgc_enabled", False):
+        # Added before the user's own arguments so that anything they typed
+        # explicitly (and therefore deliberately) wins over the toggle, and
+        # skipping flags they already typed so the collector is named once.
+        spoken_for = set(args) | set(extra)
+        args += [f for f in zgc_flags(java_major) if f not in spoken_for]
+    args += extra
     return args
 
 

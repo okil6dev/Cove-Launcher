@@ -1152,6 +1152,60 @@ def test_install_to_empty_when_no_target():
     assert "No mod target" in page.status_label.text()
 
 
+# ------------------------------------------ download-all clears the selection --
+def _one_row():
+    return {"project_id": "a", "title": "AAA", "slug": "aaa",
+            "description": "d", "source": "modrinth", "downloads": 1,
+            "author": "x"}
+
+
+def _ticked_page():
+    """A ModsPage with one mod ticked for download (no live search)."""
+    import launcher.pages.mods_page as mp
+
+    original = mp.ModSearchThread
+    mp.ModSearchThread = _FakeSearchThread
+    try:
+        page = _target_page(inst=FakeInst())
+    finally:
+        mp.ModSearchThread = original
+    page.set_busy(False)
+    page._results = [_one_row()]
+    page._populate_list()
+    page._cards["a"].checkbox.setChecked(True)
+    assert page._checked_mods, "precondition: a mod is ticked"
+    return page
+
+
+def test_successful_batch_clears_the_selection():
+    page = _ticked_page()
+    page._install_queue = []
+    page._install_total = 1
+    page._on_install_ok(["aaa.jar"])
+    assert page._checked_mods == {}
+    assert page._checked_titles == set()
+    assert page._cards["a"].checkbox.isChecked() is False
+
+
+def test_failed_batch_clears_the_selection():
+    page = _ticked_page()
+    page._install_queue = []
+    page._install_total = 1
+    page._on_install_failed("ModDBError: no compatible version")
+    assert page._checked_mods == {}
+    assert page._cards["a"].checkbox.isChecked() is False
+
+
+def test_missing_target_clears_the_selection():
+    page = _ticked_page()
+    page._install_target = lambda row: None
+    page._install_queue = [_one_row()]
+    page._install_total = 1
+    page._run_next_install()
+    assert page._checked_mods == {}
+    assert page._cards["a"].checkbox.isChecked() is False
+
+
 def _run_all() -> int:
     tests = [(n, f) for n, f in sorted(globals().items())
              if n.startswith("test_") and callable(f)]
